@@ -1,0 +1,7 @@
+{
+    "terminal.integrated.env.windows": {
+        "PATH": "${env:USERPROFILE}\\.platformio\\penv\\Scripts;${env:PATH}"
+    },
+    "platformio-ide.activateProjectOnTextEditorChange": true,
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/.pio/build/freenove_esp32_s3_wroom_n16r8/compile_commands.json"
+}
