@@ -47,7 +47,6 @@ extern "C" {
 #define BOARD_SD_D0_GPIO GPIO_NUM_40
 
 esp_err_t board_gpio_init(void);
-esp_err_t board_ir_led_set(bool enabled);
 
 #ifdef __cplusplus
 }

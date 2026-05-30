@@ -44,8 +44,3 @@ esp_err_t board_gpio_init(void)
 
     return ESP_OK;
 }
-
-esp_err_t board_ir_led_set(bool enabled)
-{
-    return gpio_set_level(BOARD_IR_LED_GPIO, enabled ? 1 : 0);
-}

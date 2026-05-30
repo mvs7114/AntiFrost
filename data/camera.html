@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AntiFrost Camera</title>
+  <link rel="stylesheet" href="/camera.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <h1>Camera Settings</h1>
+        <p>AntiFrost ESP32-S3</p>
+      </div>
+      <nav>
+        <a href="/">Home</a>
+        <a href="/wifi.html">Wi-Fi</a>
+      </nav>
+    </header>
+
+    <section class="workspace">
+      <div class="preview">
+        <div class="stream-frame">
+          <img id="stream" src="/capture" alt="Anteprima camera">
+        </div>
+        <div class="actions">
+          <button type="button" id="preview-capture">Aggiorna preview</button>
+          <button type="button" id="preview-live">Avvia live</button>
+          <button type="button" id="apply">Applica</button>
+          <button type="button" id="save-profile">Salva profilo</button>
+          <button type="button" id="restore-defaults">Ripristina default</button>
+          <button type="button" id="capture-reference">Capture riferimento</button>
+        </div>
+        <div class="status-line" id="status-line">Camera: sincronizzazione...</div>
+        <a id="capture-link" class="capture-link" hidden>Apri ultimo riferimento</a>
+      </div>
+
+      <aside class="profiles">
+        <h2>Modalita rapida</h2>
+        <div class="mode-switch" role="tablist" aria-label="Modalita camera">
+          <button type="button" class="mode-button active" data-mode="manual">Manuale</button>
+          <button type="button" class="mode-button" data-mode="preset">Preset</button>
+          <button type="button" class="mode-button" data-mode="calibration">Calibrazione AntiFrost</button>
+        </div>
+        <div class="mode-panel active" data-panel="manual">
+          <p>Regolazione diretta dei parametri camera.</p>
+        </div>
+        <div class="mode-panel" data-panel="preset">
+          <div class="preset-grid" id="preset-grid"></div>
+        </div>
+        <div class="mode-panel" data-panel="calibration">
+          <p>Profilo stabile per acquisire un riferimento e confrontare condensa o brina.</p>
+          <div class="preset-grid">
+            <button type="button" id="apply-calibration">Applica calibrazione</button>
+            <button type="button" id="capture-calibration">Capture riferimento</button>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="controls">
+      <h2>Parametri principali</h2>
+      <div class="control-grid" id="safe-controls"></div>
+    </section>
+
+    <details class="controls" open>
+      <summary>Parametri avanzati</summary>
+      <div class="control-grid" id="advanced-controls"></div>
+    </details>
+
+    <details class="controls">
+      <summary>Parametri rischiosi</summary>
+      <p class="warning">Queste impostazioni possono bloccare la camera, produrre immagine nera o richiedere un riavvio.</p>
+      <div class="control-grid" id="dangerous-controls"></div>
+      <div class="danger-tools" id="danger-tools"></div>
+    </details>
+  </main>
+  <script src="/camera.js" defer></script>
+</body>
+</html>

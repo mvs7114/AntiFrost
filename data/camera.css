@@ -1,0 +1,306 @@
+:root {
+  color-scheme: light;
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --text: #17202a;
+  --muted: #586675;
+  --line: #d9e0e8;
+  --accent: #1769aa;
+  --accent-strong: #0f4f86;
+  --warn: #b45f06;
+  --danger: #b42318;
+  --ok: #1f7a4d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.shell {
+  width: min(76rem, calc(100vw - 1.5rem));
+  margin: 0 auto;
+  padding: 1rem 0 2rem;
+}
+
+.topbar,
+.workspace,
+.controls {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 0.25rem;
+  font-size: clamp(1.75rem, 5vw, 2.5rem);
+  line-height: 1.05;
+  letter-spacing: 0;
+}
+
+h2,
+summary {
+  font-size: 1.05rem;
+  font-weight: 750;
+  letter-spacing: 0;
+}
+
+p,
+.status-line {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+a {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+button {
+  min-height: 2.45rem;
+  padding: 0.55rem 0.75rem;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #ffffff;
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--accent-strong);
+}
+
+button.danger {
+  background: var(--danger);
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(18rem, 0.8fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.stream-frame {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #111820;
+}
+
+.stream-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.actions,
+.preset-grid,
+.mode-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.85rem;
+}
+
+.profiles {
+  min-width: 0;
+}
+
+.mode-switch {
+  align-items: stretch;
+}
+
+.mode-button {
+  flex: 1 1 8rem;
+  background: #eef3f8;
+  color: var(--text);
+}
+
+.mode-button.active {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.mode-panel {
+  display: none;
+  margin-top: 0.85rem;
+}
+
+.mode-panel.active {
+  display: block;
+}
+
+.control-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 0.8rem;
+  margin-top: 0.9rem;
+}
+
+.control {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.control-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.control label {
+  font-weight: 700;
+}
+
+.help {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.badge {
+  padding: 0.16rem 0.45rem;
+  border-radius: 999px;
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.badge.advanced {
+  background: var(--warn);
+}
+
+.badge.danger {
+  background: var(--danger);
+}
+
+.input-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+input,
+select {
+  min-height: 2.3rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+}
+
+input[type="range"] {
+  width: 100%;
+}
+
+input[type="checkbox"] {
+  width: 1.3rem;
+  min-height: 1.3rem;
+}
+
+output {
+  min-width: 2.75rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+}
+
+.warning {
+  margin: 0.75rem 0 0;
+  padding: 0.75rem;
+  border: 1px solid #f0a6a0;
+  border-radius: 6px;
+  background: #fff5f4;
+  color: var(--danger);
+}
+
+.danger-tools {
+  display: grid;
+  gap: 0.8rem;
+  margin-top: 0.9rem;
+}
+
+.tool-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: 0.6rem;
+  padding: 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.tool-form.unmanaged {
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  background: #fffafa;
+}
+
+.tool-form h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.tool-form p {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.capture-link {
+  display: inline-block;
+  margin-top: 0.7rem;
+}
+
+.status-line.ok {
+  color: var(--ok);
+}
+
+.status-line.error {
+  color: var(--danger);
+}
+
+@media (max-width: 52rem) {
+  .workspace,
+  .topbar {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+}

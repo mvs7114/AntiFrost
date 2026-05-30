@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "camera_manager.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -12,6 +13,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "ir_led_control.h"
 #include "wear_levelling.h"
 #include "wifi_manager.h"
 
@@ -20,12 +22,21 @@ static const char *TAG = "web_server";
 #define WEB_SERVER_MOUNT_POINT "/www"
 #define WEB_SERVER_PARTITION_LABEL "storage"
 #define WEB_SERVER_MAX_PATH_LEN 160
-#define WEB_SERVER_FILE_BUFFER_SIZE 1024
+#define WEB_SERVER_FILE_BUFFER_SIZE 512
+#define WEB_SERVER_MAX_STATIC_FILE_SIZE 65536
+#define WEB_SERVER_SINGLE_SEND_MAX_BYTES 8192
 #define WEB_SERVER_FORM_BUFFER_SIZE 256
+#define WEB_SERVER_QUERY_BUFFER_SIZE 192
+#define WEB_SERVER_QUERY_VALUE_SIZE 64
+#define WEB_SERVER_PROFILE_BUFFER_SIZE 4096
 #define WEB_SERVER_SSID_BUFFER_SIZE 33
 #define WEB_SERVER_PASSWORD_BUFFER_SIZE 65
 #define WEB_SERVER_WIFI_APPLY_DELAY_MS 1500
 #define WEB_SERVER_RESTART_DELAY_MS 1500
+#define WEB_SERVER_MAX_URI_HANDLERS 16
+#define WEB_SERVER_MAX_OPEN_SOCKETS 5
+#define WEB_SERVER_RECV_WAIT_TIMEOUT_SEC 10
+#define WEB_SERVER_SEND_WAIT_TIMEOUT_SEC 30
 
 typedef struct {
     char ssid[WEB_SERVER_SSID_BUFFER_SIZE];
@@ -48,6 +59,11 @@ static const char *FALLBACK_INDEX_HTML =
     "<main><h1>AntiFrost</h1><p>Firmware avviato.</p>"
     "<p>Interfaccia web base attiva.</p>"
     "<p><a href=\"/setup.html\">Configura Wi-Fi</a></p></main></body></html>";
+
+static int64_t web_server_now_ms(void)
+{
+    return (int64_t)xTaskGetTickCount() * portTICK_PERIOD_MS;
+}
 
 static const char *web_server_wifi_state_to_string(wifi_manager_state_t state)
 {
@@ -173,6 +189,25 @@ static void web_server_url_decode(char *value)
     *dst = '\0';
 }
 
+static esp_err_t web_server_query_value(httpd_req_t *req,
+                                        const char *key,
+                                        char *out,
+                                        size_t out_len)
+{
+    char query[WEB_SERVER_QUERY_BUFFER_SIZE] = {0};
+    esp_err_t err = httpd_req_get_url_query_str(req, query, sizeof(query));
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = httpd_query_key_value(query, key, out, out_len);
+    if (err == ESP_OK) {
+        web_server_url_decode(out);
+    }
+
+    return err;
+}
+
 static esp_err_t web_server_form_value(const char *body,
                                        const char *key,
                                        char *out,
@@ -201,6 +236,276 @@ static esp_err_t web_server_form_value(const char *body,
     }
 
     return ESP_ERR_NOT_FOUND;
+}
+
+static bool web_server_string_is_true(const char *value)
+{
+    return strcmp(value, "1") == 0 ||
+           strcmp(value, "true") == 0 ||
+           strcmp(value, "yes") == 0;
+}
+
+static esp_err_t web_server_camera_params_get_handler(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "HTTP camera parameters");
+
+    size_t count = 0;
+    const camera_manager_param_info_t *params = camera_manager_get_params(&count);
+
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_sendstr_chunk(req, "{\"parameters\":[");
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        const camera_manager_param_info_t *param = &params[i];
+        int value = 0;
+        (void)camera_manager_get_value(param->name, &value);
+
+        char item[512] = {0};
+        int len = snprintf(
+            item,
+            sizeof(item),
+            "%s{\"name\":\"%s\",\"label\":\"%s\",\"risk\":\"%s\",\"min\":%d,\"max\":%d,\"step\":%d,\"default\":%d,\"value\":%d,\"help\":\"%s\"}",
+            i == 0 ? "" : ",",
+            param->name,
+            param->label,
+            camera_manager_risk_to_string(param->risk),
+            param->min_value,
+            param->max_value,
+            param->step,
+            param->default_value,
+            value,
+            param->help);
+        if (len <= 0 || (size_t)len >= sizeof(item)) {
+            httpd_resp_sendstr_chunk(req, NULL);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Parametro camera troppo lungo");
+            return ESP_FAIL;
+        }
+
+        err = httpd_resp_send_chunk(req, item, len);
+        if (err != ESP_OK) {
+            httpd_resp_sendstr_chunk(req, NULL);
+            return err;
+        }
+    }
+
+    err = httpd_resp_sendstr_chunk(req, "]}");
+    if (err != ESP_OK) {
+        httpd_resp_sendstr_chunk(req, NULL);
+        return err;
+    }
+
+    return httpd_resp_sendstr_chunk(req, NULL);
+}
+
+static esp_err_t web_server_camera_control_get_handler(httpd_req_t *req)
+{
+    char name[WEB_SERVER_QUERY_VALUE_SIZE] = {0};
+    char value_text[WEB_SERVER_QUERY_VALUE_SIZE] = {0};
+    char dangerous_text[WEB_SERVER_QUERY_VALUE_SIZE] = {0};
+
+    esp_err_t err = web_server_query_value(req, "var", name, sizeof(name));
+    if (err != ESP_OK || name[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Parametro camera mancante");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = web_server_query_value(req, "val", value_text, sizeof(value_text));
+    if (err != ESP_OK || value_text[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Valore camera mancante");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char *end = NULL;
+    long value = strtol(value_text, &end, 10);
+    if (end == value_text || *end != '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Valore camera non numerico");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    bool dangerous_confirmed = false;
+    if (web_server_query_value(req, "dangerous", dangerous_text, sizeof(dangerous_text)) == ESP_OK) {
+        dangerous_confirmed = web_server_string_is_true(dangerous_text);
+    }
+
+    err = camera_manager_set_value(name, (int)value, dangerous_confirmed);
+    if (err == ESP_ERR_NOT_FOUND) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Parametro camera sconosciuto");
+        return err;
+    }
+    if (err == ESP_ERR_INVALID_STATE) {
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "Parametro rischioso non confermato");
+        return err;
+    }
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Parametro camera non valido");
+        return err;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+static esp_err_t web_server_camera_defaults_post_handler(httpd_req_t *req)
+{
+    esp_err_t err = camera_manager_restore_defaults();
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Reset default camera fallito");
+        return err;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+static esp_err_t web_server_camera_status_get_handler(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "HTTP camera status");
+    return camera_manager_send_status(req);
+}
+
+static esp_err_t web_server_camera_capture_get_handler(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "HTTP camera capture");
+    return camera_manager_send_capture(req);
+}
+
+static esp_err_t web_server_ir_status_get_handler(httpd_req_t *req)
+{
+    bool enabled = ir_led_control_is_enabled();
+    char response[32] = {0};
+    int len = snprintf(response,
+                       sizeof(response),
+                       "{\"enabled\":%s}",
+                       enabled ? "true" : "false");
+    if (len <= 0 || (size_t)len >= sizeof(response)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Status IR troppo lungo");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, response, len);
+}
+
+static esp_err_t web_server_ir_control_get_handler(httpd_req_t *req)
+{
+    char enabled_text[WEB_SERVER_QUERY_VALUE_SIZE] = {0};
+    esp_err_t err = web_server_query_value(req, "enabled", enabled_text, sizeof(enabled_text));
+    if (err != ESP_OK || enabled_text[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Parametro IR mancante");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = ir_led_control_set_enabled(web_server_string_is_true(enabled_text));
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Comando IR fallito");
+        return err;
+    }
+
+    return web_server_ir_status_get_handler(req);
+}
+
+static esp_err_t web_server_camera_profile_post_handler(httpd_req_t *req)
+{
+    if (req->content_len <= 0 || req->content_len >= WEB_SERVER_PROFILE_BUFFER_SIZE) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Profilo camera non valido");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char *body = calloc(1, WEB_SERVER_PROFILE_BUFFER_SIZE);
+    if (body == NULL) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memoria profilo insufficiente");
+        return ESP_ERR_NO_MEM;
+    }
+
+    int received_total = 0;
+
+    while (received_total < req->content_len) {
+        int received = httpd_req_recv(req,
+                                      body + received_total,
+                                      req->content_len - received_total);
+        if (received <= 0) {
+            free(body);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Ricezione profilo fallita");
+            return ESP_FAIL;
+        }
+
+        received_total += received;
+    }
+    body[received_total] = '\0';
+
+    FILE *file = fopen(WEB_SERVER_MOUNT_POINT "/camera_profile.json", "w");
+    if (file == NULL) {
+        free(body);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Apertura profilo FAT fallita");
+        return ESP_FAIL;
+    }
+
+    size_t written = fwrite(body, 1, (size_t)received_total, file);
+    if (written != (size_t)received_total) {
+        fclose(file);
+        free(body);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Scrittura profilo FAT fallita");
+        return ESP_FAIL;
+    }
+
+    if (fclose(file) != 0) {
+        free(body);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Chiusura profilo FAT fallita");
+        return ESP_FAIL;
+    }
+
+    free(body);
+    ESP_LOGI(TAG, "Profilo camera salvato su FAT");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+static esp_err_t web_server_camera_reference_post_handler(httpd_req_t *req)
+{
+    if (req->content_len <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Riferimento camera vuoto");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    FILE *file = fopen(WEB_SERVER_MOUNT_POINT "/camera_reference.jpg", "wb");
+    if (file == NULL) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Apertura riferimento FAT fallita");
+        return ESP_FAIL;
+    }
+
+    char buffer[WEB_SERVER_FILE_BUFFER_SIZE];
+    int remaining = req->content_len;
+
+    while (remaining > 0) {
+        int to_read = remaining > (int)sizeof(buffer) ? (int)sizeof(buffer) : remaining;
+        int received = httpd_req_recv(req, buffer, to_read);
+        if (received <= 0) {
+            fclose(file);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Ricezione riferimento fallita");
+            return ESP_FAIL;
+        }
+
+        size_t written = fwrite(buffer, 1, (size_t)received, file);
+        if (written != (size_t)received) {
+            fclose(file);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Scrittura riferimento FAT fallita");
+            return ESP_FAIL;
+        }
+
+        remaining -= received;
+    }
+
+    if (fclose(file) != 0) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Chiusura riferimento FAT fallita");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Riferimento camera salvato su FAT");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true,\"path\":\"/camera_reference.jpg\"}");
 }
 
 static void web_server_wifi_apply_task(void *arg)
@@ -423,6 +728,9 @@ static esp_err_t web_server_build_file_path(const httpd_req_t *req,
     if (uri_len == 1 && uri[0] == '/') {
         uri = "/index.html";
         uri_len = strlen(uri);
+    } else if (uri_len == strlen("/camera") && strncmp(uri, "/camera", uri_len) == 0) {
+        uri = "/camera.html";
+        uri_len = strlen(uri);
     }
 
     if (uri_len == 0 || uri[0] != '/' || strstr(uri, "..") != NULL) {
@@ -444,34 +752,156 @@ static esp_err_t web_server_build_file_path(const httpd_req_t *req,
 
 static esp_err_t web_server_send_file(httpd_req_t *req, const char *path)
 {
+    int64_t start_ms = web_server_now_ms();
     FILE *file = fopen(path, "rb");
     if (file == NULL) {
         if (strcmp(path, WEB_SERVER_MOUNT_POINT "/index.html") == 0) {
             httpd_resp_set_type(req, "text/html");
             return httpd_resp_send(req, FALLBACK_INDEX_HTML, HTTPD_RESP_USE_STRLEN);
         }
-
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File non trovato");
         return ESP_FAIL;
     }
 
-    char buffer[WEB_SERVER_FILE_BUFFER_SIZE];
-    httpd_resp_set_type(req, web_server_content_type(path));
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Lettura file fallita");
+        return ESP_FAIL;
+    }
 
-    while (!feof(file)) {
-        size_t read_len = fread(buffer, 1, sizeof(buffer), file);
-        if (read_len > 0) {
-            esp_err_t err = httpd_resp_send_chunk(req, buffer, read_len);
-            if (err != ESP_OK) {
-                fclose(file);
-                httpd_resp_sendstr_chunk(req, NULL);
-                return err;
-            }
+    long file_size = ftell(file);
+    if (file_size < 0 || fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Dimensione file non valida");
+        return ESP_FAIL;
+    }
+
+    if (file_size > WEB_SERVER_MAX_STATIC_FILE_SIZE) {
+        fclose(file);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "File statico troppo grande");
+        return ESP_FAIL;
+    }
+
+    int64_t stat_done_ms = web_server_now_ms();
+    if (file_size <= WEB_SERVER_SINGLE_SEND_MAX_BYTES) {
+        char *body = malloc((size_t)file_size);
+        if (body == NULL) {
+            fclose(file);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memoria file insufficiente");
+            return ESP_ERR_NO_MEM;
         }
+
+        size_t read_len = fread(body, 1, (size_t)file_size, file);
+        fclose(file);
+        if (read_len != (size_t)file_size) {
+            free(body);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Lettura file incompleta");
+            return ESP_FAIL;
+        }
+
+        char content_length[16] = {0};
+        int content_length_len = snprintf(content_length, sizeof(content_length), "%ld", file_size);
+        if (content_length_len <= 0 || (size_t)content_length_len >= sizeof(content_length)) {
+            free(body);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "File troppo grande");
+            return ESP_FAIL;
+        }
+
+        httpd_resp_set_type(req, web_server_content_type(path));
+        httpd_resp_set_hdr(req, "Content-Length", content_length);
+        httpd_resp_set_hdr(req, "Connection", "close");
+
+        esp_err_t send_err = httpd_resp_send(req, body, read_len);
+        free(body);
+        int64_t done_ms = web_server_now_ms();
+        if (send_err != ESP_OK) {
+            ESP_LOGW(TAG,
+                     "Invio file piccolo %s fallito (%ld bytes): %s timing open/stat=%lldms total=%lldms",
+                     path,
+                     file_size,
+                     esp_err_to_name(send_err),
+                     (long long)(stat_done_ms - start_ms),
+                     (long long)(done_ms - start_ms));
+            return send_err;
+        }
+
+        ESP_LOGI(TAG,
+                 "HTTP sent %s (%ld bytes) mode=single timing open/stat=%lldms total=%lldms",
+                 path,
+                 file_size,
+                 (long long)(stat_done_ms - start_ms),
+                 (long long)(done_ms - start_ms));
+        return ESP_OK;
+    }
+
+    char *buffer = malloc(WEB_SERVER_FILE_BUFFER_SIZE);
+    if (buffer == NULL) {
+        fclose(file);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memoria file insufficiente");
+        return ESP_ERR_NO_MEM;
+    }
+
+    httpd_resp_set_type(req, web_server_content_type(path));
+    httpd_resp_set_hdr(req, "Connection", "close");
+
+    size_t total_sent = 0;
+    esp_err_t err = ESP_OK;
+    int64_t first_send_start_ms = 0;
+    while (total_sent < (size_t)file_size) {
+        size_t read_len = fread(buffer, 1, WEB_SERVER_FILE_BUFFER_SIZE, file);
+        if (read_len == 0) {
+            err = ferror(file) ? ESP_FAIL : ESP_OK;
+            break;
+        }
+
+        if (first_send_start_ms == 0) {
+            first_send_start_ms = web_server_now_ms();
+        }
+        err = httpd_resp_send_chunk(req, buffer, read_len);
+        if (err != ESP_OK) {
+            int64_t fail_ms = web_server_now_ms();
+            ESP_LOGW(TAG,
+                     "Invio file %s fallito dopo %u/%ld bytes: %s timing open/stat=%lldms send=%lldms total=%lldms",
+                     path,
+                     (unsigned int)total_sent,
+                     file_size,
+                     esp_err_to_name(err),
+                     (long long)(stat_done_ms - start_ms),
+                     (long long)(fail_ms - first_send_start_ms),
+                     (long long)(fail_ms - start_ms));
+            break;
+        }
+
+        total_sent += read_len;
     }
 
     fclose(file);
-    return httpd_resp_sendstr_chunk(req, NULL);
+    free(buffer);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (total_sent != (size_t)file_size) {
+        httpd_resp_sendstr_chunk(req, NULL);
+        ESP_LOGW(TAG, "Lettura file %s incompleta: %u/%ld bytes",
+                 path, (unsigned int)total_sent, file_size);
+        return ESP_FAIL;
+    }
+
+    err = httpd_resp_sendstr_chunk(req, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Chiusura chunk file %s fallita: %s", path, esp_err_to_name(err));
+        return err;
+    }
+
+    int64_t done_ms = web_server_now_ms();
+    ESP_LOGI(TAG,
+             "HTTP sent %s (%ld bytes) timing open/stat=%lldms send=%lldms total=%lldms",
+             path,
+             file_size,
+             (long long)(stat_done_ms - start_ms),
+             first_send_start_ms == 0 ? 0 : (long long)(done_ms - first_send_start_ms),
+             (long long)(done_ms - start_ms));
+    return ESP_OK;
 }
 
 static esp_err_t web_server_static_handler(httpd_req_t *req)
@@ -483,6 +913,7 @@ static esp_err_t web_server_static_handler(httpd_req_t *req)
         return err;
     }
 
+    ESP_LOGI(TAG, "HTTP static %s -> %s", req->uri, path);
     return web_server_send_file(req, path);
 }
 
@@ -526,6 +957,11 @@ esp_err_t web_server_start(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
+    config.max_uri_handlers = WEB_SERVER_MAX_URI_HANDLERS;
+    config.max_open_sockets = WEB_SERVER_MAX_OPEN_SOCKETS;
+    config.lru_purge_enable = true;
+    config.recv_wait_timeout = WEB_SERVER_RECV_WAIT_TIMEOUT_SEC;
+    config.send_wait_timeout = WEB_SERVER_SEND_WAIT_TIMEOUT_SEC;
 
     err = httpd_start(&s_server, &config);
     if (err != ESP_OK) {
@@ -533,6 +969,8 @@ esp_err_t web_server_start(void)
         s_server = NULL;
         return err;
     }
+
+    ESP_ERROR_CHECK_WITHOUT_ABORT(camera_manager_init());
 
     const httpd_uri_t static_files = {
         .uri = "/*",
@@ -562,6 +1000,69 @@ esp_err_t web_server_start(void)
         .user_ctx = NULL,
     };
 
+    const httpd_uri_t camera_params_get = {
+        .uri = "/api/camera/parameters",
+        .method = HTTP_GET,
+        .handler = web_server_camera_params_get_handler,
+        .user_ctx = NULL,
+    };
+
+    const httpd_uri_t camera_control_get = {
+        .uri = "/control",
+        .method = HTTP_GET,
+        .handler = web_server_camera_control_get_handler,
+        .user_ctx = NULL,
+    };
+
+    const httpd_uri_t camera_status_get = {
+        .uri = "/status",
+        .method = HTTP_GET,
+        .handler = web_server_camera_status_get_handler,
+        .user_ctx = NULL,
+    };
+
+    const httpd_uri_t camera_capture_get = {
+        .uri = "/capture",
+        .method = HTTP_GET,
+        .handler = web_server_camera_capture_get_handler,
+        .user_ctx = NULL,
+    };
+
+    const httpd_uri_t ir_status_get = {
+        .uri = "/api/ir/status",
+        .method = HTTP_GET,
+        .handler = web_server_ir_status_get_handler,
+        .user_ctx = NULL,
+    };
+
+    const httpd_uri_t ir_control_get = {
+        .uri = "/api/ir/control",
+        .method = HTTP_GET,
+        .handler = web_server_ir_control_get_handler,
+        .user_ctx = NULL,
+    };
+
+    const httpd_uri_t camera_defaults_post = {
+        .uri = "/api/camera/defaults",
+        .method = HTTP_POST,
+        .handler = web_server_camera_defaults_post_handler,
+        .user_ctx = NULL,
+    };
+
+    const httpd_uri_t camera_profile_post = {
+        .uri = "/api/camera/profile",
+        .method = HTTP_POST,
+        .handler = web_server_camera_profile_post_handler,
+        .user_ctx = NULL,
+    };
+
+    const httpd_uri_t camera_reference_post = {
+        .uri = "/api/camera/reference",
+        .method = HTTP_POST,
+        .handler = web_server_camera_reference_post_handler,
+        .user_ctx = NULL,
+    };
+
     err = httpd_register_uri_handler(s_server, &wifi_post);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Registrazione handler Wi-Fi fallita: %s", esp_err_to_name(err));
@@ -581,6 +1082,78 @@ esp_err_t web_server_start(void)
     err = httpd_register_uri_handler(s_server, &wifi_status_get);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Registrazione handler stato Wi-Fi fallita: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
+
+    err = httpd_register_uri_handler(s_server, &camera_params_get);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Registrazione handler parametri camera fallita: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
+
+    err = httpd_register_uri_handler(s_server, &camera_control_get);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Registrazione handler control camera fallita: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
+
+    err = httpd_register_uri_handler(s_server, &camera_status_get);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Registrazione handler status camera fallita: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
+
+    err = httpd_register_uri_handler(s_server, &camera_capture_get);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Registrazione handler capture camera fallita: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
+
+    err = httpd_register_uri_handler(s_server, &ir_status_get);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Registrazione handler stato IR fallita: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
+
+    err = httpd_register_uri_handler(s_server, &ir_control_get);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Registrazione handler controllo IR fallita: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
+
+    err = httpd_register_uri_handler(s_server, &camera_defaults_post);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Registrazione handler default camera fallita: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
+
+    err = httpd_register_uri_handler(s_server, &camera_profile_post);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Registrazione handler profilo camera fallita: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
+
+    err = httpd_register_uri_handler(s_server, &camera_reference_post);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Registrazione handler riferimento camera fallita: %s", esp_err_to_name(err));
         httpd_stop(s_server);
         s_server = NULL;
         return err;

@@ -6,6 +6,7 @@
 
 #include "app_logger.h"
 #include "board_config.h"
+#include "ir_led_control.h"
 #include "sd_storage.h"
 #include "system_services.h"
 #include "system_monitor.h"
@@ -16,13 +17,17 @@ static const char *TAG = "antifrost";
 
 #define WIFI_MANAGER_ENABLED 1
 #define WEB_SERVER_ENABLED 1
-#define HEARTBEAT_ENABLED 1
+#define HEARTBEAT_ENABLED 0
+#define HEARTBEAT_INTERVAL_MS 30000
 
 void app_main(void)
 {
+#if HEARTBEAT_ENABLED
     bool app_logger_ready = false;
+#endif
 
     ESP_ERROR_CHECK(board_gpio_init());
+    ESP_ERROR_CHECK(ir_led_control_init());
     ESP_ERROR_CHECK(system_services_init());
     ESP_ERROR_CHECK(sys_monitor_init());
 
@@ -48,7 +53,9 @@ void app_main(void)
 
         esp_err_t logger_err = app_logger_init();
         if (logger_err == ESP_OK) {
+#if HEARTBEAT_ENABLED
             app_logger_ready = true;
+#endif
             ESP_ERROR_CHECK_WITHOUT_ABORT(app_logger_write("INFO", TAG, "boot completato"));
             ESP_ERROR_CHECK_WITHOUT_ABORT(app_logger_write("INFO", TAG, "test SD/log persistente avviato"));
         }
@@ -64,6 +71,6 @@ void app_main(void)
             ESP_ERROR_CHECK_WITHOUT_ABORT(app_logger_write("INFO", TAG, "heartbeat"));
         }
 #endif
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        vTaskDelay(pdMS_TO_TICKS(HEARTBEAT_INTERVAL_MS));
     }
 }
