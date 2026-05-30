@@ -28,6 +28,7 @@ Ogni capacita' significativa viene isolata in un componente con:
 AntiFrost/
   components/
     board_config/
+    system_services/
     system_monitor/
     dht_sensor/
     fan_control/
@@ -53,11 +54,40 @@ Sequenza prevista:
 1. Boot ESP-IDF.
 2. Diagnostica base chip, flash, PSRAM e heap.
 3. Inizializzazione `board_config`.
-4. Inizializzazione moduli di sistema.
+4. Inizializzazione servizi condivisi (`system_services`), inclusa NVS.
 5. Mount storage, se presente.
 6. Avvio `app_logger` per log persistenti su SD.
-7. Avvio task applicativi.
-8. Loop o task di heartbeat.
+7. Avvio `wifi_manager` quando serve rete o portale di configurazione.
+8. Avvio `web_server` per servire file statici dalla FATFS interna.
+9. Avvio task applicativi.
+10. Loop o task di heartbeat.
+
+## Wi-Fi Manager
+
+`wifi_manager` e' il componente responsabile della connettivita' Wi-Fi nativa ESP-IDF.
+
+Regole iniziali:
+
+- dipende da NVS gia' inizializzata da `system_services`;
+- usa `esp_wifi`, `esp_netif` ed `esp_event`;
+- non espone API HTTP e non serve pagine web;
+- se esiste una configurazione STA salvata nel driver Wi-Fi, prova la connessione;
+- viene avviato da `app_main()` in modo non bloccante: se fallisce, il firmware continua senza rete;
+- se non esiste una configurazione STA, o la connessione fallisce dopo retry limitati, avvia un SoftAP di setup;
+- il SoftAP e' solo una base per il futuro portale di configurazione, non ancora un'interfaccia operativa.
+
+## Web Server
+
+`web_server` espone un server HTTP nativo ESP-IDF basato su `esp_http_server`.
+
+Regole iniziali:
+
+- monta la partizione FATFS interna con label `storage` su `/www`;
+- serve file statici dalla FATFS interna, a partire da `/index.html`;
+- non usa la SD esterna per UI, asset o pagine web;
+- espone gli endpoint minimi `POST /api/wifi`, `POST /api/wifi/reset` e `GET /api/wifi/status`;
+- non espone ancora API operative di AntiFrost;
+- se la pagina `index.html` non e' presente nella FATFS, serve una pagina fallback minimale compilata nel firmware.
 
 ## Logging
 

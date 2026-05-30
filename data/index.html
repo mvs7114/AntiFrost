@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AntiFrost</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fa;
+      --panel: #ffffff;
+      --text: #17202a;
+      --muted: #51606f;
+      --line: #d8dee6;
+      --accent: #1976d2;
+      --ok: #1f8a5b;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: min(36rem, calc(100vw - 2rem));
+      padding: 2rem;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    h1 {
+      margin: 0 0 0.75rem;
+      font-size: clamp(2rem, 8vw, 3.5rem);
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0.5rem 0;
+      color: var(--muted);
+      font-size: 1rem;
+      line-height: 1.5;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 1.25rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--line);
+      color: var(--ok);
+      font-weight: 600;
+    }
+
+    .dot {
+      width: 0.625rem;
+      height: 0.625rem;
+      border-radius: 999px;
+      background: currentColor;
+    }
+
+    .wifi-state {
+      margin-top: 1rem;
+      padding: 0.85rem 1rem;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #f9fbfd;
+    }
+
+    .wifi-state strong {
+      color: var(--text);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>AntiFrost</h1>
+    <p>Firmware avviato.</p>
+    <p>Interfaccia web base attiva.</p>
+    <p><a href="/setup.html">Configura Wi-Fi</a></p>
+    <p><a href="/wifi.html">Gestisci Wi-Fi</a></p>
+    <div class="wifi-state" id="wifi-state">Stato Wi-Fi: caricamento...</div>
+    <div class="status"><span class="dot"></span><span>Online</span></div>
+  </main>
+  <script>
+    async function loadWifiStatus() {
+      const el = document.getElementById("wifi-state");
+      try {
+        const response = await fetch("/api/wifi/status", { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("status " + response.status);
+        }
+        const data = await response.json();
+        const mode = data.mode || "UNKNOWN";
+        const state = data.state || "UNKNOWN";
+        const ip = mode === "SOFTAP" ? data.softap?.ip : data.sta?.ip;
+        const shownIp = ip && ip.length > 0 ? ip : "n/d";
+        el.innerHTML = "<strong>Modalita:</strong> " + mode +
+          " | <strong>Stato:</strong> " + state +
+          " | <strong>IP:</strong> " + shownIp;
+      } catch (error) {
+        el.textContent = "Stato Wi-Fi non disponibile.";
+      }
+    }
+
+    loadWifiStatus();
+    setInterval(loadWifiStatus, 5000);
+  </script>
+</body>
+</html>

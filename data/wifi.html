@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AntiFrost Wi-Fi</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fa;
+      --panel: #ffffff;
+      --text: #17202a;
+      --muted: #51606f;
+      --line: #d8dee6;
+      --danger: #b42318;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: min(36rem, calc(100vw - 2rem));
+      padding: 2rem;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    h1 {
+      margin: 0 0 0.75rem;
+      font-size: 2rem;
+      line-height: 1.1;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0.5rem 0;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    form {
+      margin-top: 1.5rem;
+      padding-top: 1.25rem;
+      border-top: 1px solid var(--line);
+    }
+
+    button {
+      width: 100%;
+      min-height: 2.75rem;
+      border: 0;
+      border-radius: 6px;
+      background: var(--danger);
+      color: #ffffff;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    a {
+      color: #1976d2;
+    }
+
+    .wifi-state {
+      margin: 0.25rem 0 1rem;
+      padding: 0.75rem 0.9rem;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #f9fbfd;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .wifi-state strong {
+      color: var(--text);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Wi-Fi AntiFrost</h1>
+    <p>Il dispositivo sta usando una configurazione Wi-Fi salvata.</p>
+    <p>Il reset cancella SSID e password salvati, poi riavvia AntiFrost in modalita' SoftAP.</p>
+    <div class="wifi-state" id="wifi-state">Stato Wi-Fi: caricamento...</div>
+    <form method="post" action="/api/wifi/reset">
+      <button type="submit">Reset Wi-Fi</button>
+    </form>
+    <p><a href="/">Torna alla pagina iniziale</a></p>
+  </main>
+  <script>
+    async function loadWifiStatus() {
+      const el = document.getElementById("wifi-state");
+      try {
+        const response = await fetch("/api/wifi/status", { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("status " + response.status);
+        }
+        const data = await response.json();
+        const mode = data.mode || "UNKNOWN";
+        const state = data.state || "UNKNOWN";
+        const staIp = data.sta?.ip && data.sta.ip.length > 0 ? data.sta.ip : "n/d";
+        const apIp = data.softap?.ip && data.softap.ip.length > 0 ? data.softap.ip : "n/d";
+        el.innerHTML = "<strong>Modalita:</strong> " + mode +
+          " | <strong>Stato:</strong> " + state +
+          " | <strong>IP STA:</strong> " + staIp +
+          " | <strong>IP SoftAP:</strong> " + apIp;
+      } catch (error) {
+        el.textContent = "Stato Wi-Fi non disponibile.";
+      }
+    }
+
+    loadWifiStatus();
+    setInterval(loadWifiStatus, 5000);
+  </script>
+</body>
+</html>
