@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -10,6 +11,7 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 static const char *TAG = "camera_manager";
@@ -18,11 +20,18 @@ static const char *TAG = "camera_manager";
 #define CAMERA_MANAGER_LINE_BUFFER_SIZE 96
 #define CAMERA_MANAGER_STATUS_BUFFER_SIZE 1024
 #define CAMERA_MANAGER_STREAM_PORT 81
+#define CAMERA_MANAGER_STREAM_CTRL_PORT 32769
+#define CAMERA_MANAGER_STREAM_STACK_SIZE 8192
 #define CAMERA_MANAGER_XCLK_FREQ_HZ 10000000
 #define CAMERA_MANAGER_FRAMEBUFFER_COUNT 1
 #define CAMERA_MANAGER_STREAM_MAX_OPEN_SOCKETS 2
-#define CAMERA_MANAGER_STREAM_SEND_WAIT_TIMEOUT_SEC 30
-#define CAMERA_MANAGER_STREAM_FRAME_INTERVAL_MS 120
+#define CAMERA_MANAGER_STREAM_SEND_WAIT_TIMEOUT_SEC 15
+#define CAMERA_MANAGER_STREAM_RECV_WAIT_TIMEOUT_SEC 5
+#define CAMERA_MANAGER_STREAM_FRAME_INTERVAL_MS 160
+#define CAMERA_MANAGER_STREAM_PAYLOAD_CHUNK_SIZE 2048
+#define CAMERA_MANAGER_WARMUP_FRAME_COUNT 10
+#define CAMERA_MANAGER_WARMUP_DELAY_MS 200
+#define CAMERA_MANAGER_MUTEX_TIMEOUT_MS 50
 
 static const char *STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=frame";
 static const char *STREAM_BOUNDARY = "\r\n--frame\r\n";
@@ -32,14 +41,16 @@ static httpd_handle_t s_stream_server;
 static bool s_initialized;
 static bool s_camera_ready;
 static volatile bool s_stream_active;
+static SemaphoreHandle_t s_camera_mutex;
 
 static const camera_manager_param_info_t s_params[] = {
     {.name = "framesize", .label = "Formato frame", .risk = CAMERA_MANAGER_PARAM_ADVANCED, .min_value = 0, .max_value = FRAMESIZE_QXGA, .step = 1, .default_value = FRAMESIZE_QVGA, .help = "Cambia dimensione frame e memoria richiesta. OV3660 supporta fino a QXGA, ma i formati alti richiedono piu PSRAM e banda."},
     {.name = "quality", .label = "Qualita JPEG", .risk = CAMERA_MANAGER_PARAM_SAFE, .min_value = 4, .max_value = 63, .step = 1, .default_value = 12, .help = "Regola compressione JPEG."},
-    {.name = "brightness", .label = "Luminosita", .risk = CAMERA_MANAGER_PARAM_SAFE, .min_value = -2, .max_value = 2, .step = 1, .default_value = 0, .help = "Regola la luminosita dell'immagine."},
+    {.name = "brightness", .label = "Luminosita", .risk = CAMERA_MANAGER_PARAM_SAFE, .min_value = -2, .max_value = 2, .step = 1, .default_value = 1, .help = "Regola la luminosita dell'immagine."},
     {.name = "contrast", .label = "Contrasto", .risk = CAMERA_MANAGER_PARAM_SAFE, .min_value = -2, .max_value = 2, .step = 1, .default_value = 0, .help = "Regola il contrasto."},
     {.name = "saturation", .label = "Saturazione", .risk = CAMERA_MANAGER_PARAM_SAFE, .min_value = -2, .max_value = 2, .step = 1, .default_value = 0, .help = "Regola l'intensita dei colori."},
-    {.name = "gainceiling", .label = "Gain ceiling", .risk = CAMERA_MANAGER_PARAM_ADVANCED, .min_value = 0, .max_value = 6, .step = 1, .default_value = 0, .help = "Limita il guadagno automatico massimo."},
+    {.name = "sharpness", .label = "Nitidezza", .risk = CAMERA_MANAGER_PARAM_SAFE, .min_value = -3, .max_value = 3, .step = 1, .default_value = 0, .help = "Regola l'enfasi dei bordi."},
+    {.name = "gainceiling", .label = "Gain ceiling", .risk = CAMERA_MANAGER_PARAM_ADVANCED, .min_value = 0, .max_value = 6, .step = 1, .default_value = 3, .help = "Limita il guadagno automatico massimo."},
     {.name = "colorbar", .label = "Barre colore test", .risk = CAMERA_MANAGER_PARAM_DANGEROUS, .min_value = 0, .max_value = 1, .step = 1, .default_value = 0, .help = "Sostituisce l'immagine reale con un pattern di test."},
     {.name = "awb", .label = "Auto white balance", .risk = CAMERA_MANAGER_PARAM_SAFE, .min_value = 0, .max_value = 1, .step = 1, .default_value = 1, .help = "Abilita il bilanciamento automatico del bianco."},
     {.name = "agc", .label = "Auto gain", .risk = CAMERA_MANAGER_PARAM_DANGEROUS, .min_value = 0, .max_value = 1, .step = 1, .default_value = 1, .help = "Disabilitarlo puo produrre frame troppo scuri o saturi."},
@@ -57,7 +68,7 @@ static const camera_manager_param_info_t s_params[] = {
     {.name = "lenc", .label = "Lens correction", .risk = CAMERA_MANAGER_PARAM_ADVANCED, .min_value = 0, .max_value = 1, .step = 1, .default_value = 1, .help = "Applica la correzione lente del sensore."},
     {.name = "special_effect", .label = "Effetto speciale", .risk = CAMERA_MANAGER_PARAM_ADVANCED, .min_value = 0, .max_value = 6, .step = 1, .default_value = 0, .help = "Modifica il rendering colore del sensore."},
     {.name = "wb_mode", .label = "Bilanciamento bianco", .risk = CAMERA_MANAGER_PARAM_ADVANCED, .min_value = 0, .max_value = 4, .step = 1, .default_value = 0, .help = "Cambia la resa cromatica."},
-    {.name = "ae_level", .label = "Livello AE", .risk = CAMERA_MANAGER_PARAM_ADVANCED, .min_value = -2, .max_value = 2, .step = 1, .default_value = 0, .help = "Compensa il livello dell'esposizione automatica."},
+    {.name = "ae_level", .label = "Livello AE", .risk = CAMERA_MANAGER_PARAM_ADVANCED, .min_value = -2, .max_value = 2, .step = 1, .default_value = 1, .help = "Compensa il livello dell'esposizione automatica."},
 };
 
 static int s_values[sizeof(s_params) / sizeof(s_params[0])];
@@ -195,6 +206,9 @@ static esp_err_t camera_manager_apply_sensor_value(const char *name, int value)
     if (strcmp(name, "saturation") == 0) {
         return sensor->set_saturation(sensor, value) == 0 ? ESP_OK : ESP_FAIL;
     }
+    if (strcmp(name, "sharpness") == 0) {
+        return sensor->set_sharpness(sensor, value) == 0 ? ESP_OK : ESP_FAIL;
+    }
     if (strcmp(name, "gainceiling") == 0) {
         return sensor->set_gainceiling(sensor, (gainceiling_t)value) == 0 ? ESP_OK : ESP_FAIL;
     }
@@ -266,6 +280,119 @@ static void camera_manager_apply_loaded_config(void)
     }
 }
 
+static bool camera_is_valid_jpeg(const camera_fb_t *fb)
+{
+    return fb != NULL &&
+           fb->buf != NULL &&
+           fb->len >= 4 &&
+           fb->buf[0] == 0xFF &&
+           fb->buf[1] == 0xD8 &&
+           fb->buf[fb->len - 2] == 0xFF &&
+           fb->buf[fb->len - 1] == 0xD9;
+}
+
+static void camera_manager_log_frame_bytes(const char *context, const camera_fb_t *fb)
+{
+    if (fb == NULL || fb->buf == NULL || fb->len < 2) {
+        ESP_LOGW(TAG, "%s: frame non valido o troppo corto", context);
+        return;
+    }
+
+    ESP_LOGI(TAG,
+             "%s: len=%u format=%d first=%02X %02X last=%02X %02X valid_jpeg=%s",
+             context,
+             (unsigned int)fb->len,
+             fb->format,
+             fb->buf[0],
+             fb->buf[1],
+             fb->buf[fb->len - 2],
+             fb->buf[fb->len - 1],
+             camera_is_valid_jpeg(fb) ? "true" : "false");
+}
+
+static bool camera_manager_take_mutex(TickType_t timeout_ticks)
+{
+    return s_camera_mutex != NULL &&
+           xSemaphoreTake(s_camera_mutex, timeout_ticks) == pdTRUE;
+}
+
+static void camera_manager_give_mutex(void)
+{
+    if (s_camera_mutex != NULL) {
+        xSemaphoreGive(s_camera_mutex);
+    }
+}
+
+static esp_err_t camera_manager_send_busy(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "503 Service Unavailable");
+    httpd_resp_set_type(req, "text/plain");
+    return httpd_resp_sendstr(req, "camera busy");
+}
+
+static void camera_manager_warmup(void)
+{
+    for (int i = 0; i < CAMERA_MANAGER_WARMUP_FRAME_COUNT; i++) {
+        if (!camera_manager_take_mutex(pdMS_TO_TICKS(CAMERA_MANAGER_MUTEX_TIMEOUT_MS))) {
+            ESP_LOGW(TAG, "Warmup frame %d: camera occupata", i + 1);
+            vTaskDelay(pdMS_TO_TICKS(CAMERA_MANAGER_WARMUP_DELAY_MS));
+            continue;
+        }
+
+        camera_fb_t *fb = esp_camera_fb_get();
+        if (fb == NULL) {
+            ESP_LOGW(TAG, "Warmup frame %d: timeout frame", i + 1);
+            camera_manager_give_mutex();
+            vTaskDelay(pdMS_TO_TICKS(CAMERA_MANAGER_WARMUP_DELAY_MS));
+            continue;
+        }
+
+        char context[32] = {0};
+        snprintf(context, sizeof(context), "Warmup frame %d", i + 1);
+        camera_manager_log_frame_bytes(context, fb);
+        esp_camera_fb_return(fb);
+        camera_manager_give_mutex();
+        vTaskDelay(pdMS_TO_TICKS(CAMERA_MANAGER_WARMUP_DELAY_MS));
+    }
+}
+
+static esp_err_t camera_manager_send_frame_chunked(httpd_req_t *req, const uint8_t *frame, size_t frame_len)
+{
+    esp_err_t err = httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY));
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    char header[64] = {0};
+    int header_len = snprintf(header, sizeof(header), STREAM_PART_HEADER, (unsigned int)frame_len);
+    if (header_len <= 0 || (size_t)header_len >= sizeof(header)) {
+        return ESP_FAIL;
+    }
+
+    err = httpd_resp_send_chunk(req, header, header_len);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    size_t offset = 0;
+    while (offset < frame_len) {
+        size_t remaining = frame_len - offset;
+        size_t chunk_len = remaining > CAMERA_MANAGER_STREAM_PAYLOAD_CHUNK_SIZE
+                               ? CAMERA_MANAGER_STREAM_PAYLOAD_CHUNK_SIZE
+                               : remaining;
+
+        err = httpd_resp_send_chunk(req, (const char *)(frame + offset), chunk_len);
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        offset += chunk_len;
+        taskYIELD();
+    }
+
+    return ESP_OK;
+}
+
 static esp_err_t camera_manager_stream_handler(httpd_req_t *req)
 {
     if (!s_camera_ready) {
@@ -279,36 +406,52 @@ static esp_err_t camera_manager_stream_handler(httpd_req_t *req)
     }
 
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    httpd_resp_set_hdr(req, "X-Framerate", "8");
+    httpd_resp_set_hdr(req, "X-Framerate", "6");
     s_stream_active = true;
     ESP_LOGI(TAG, "Client stream connesso");
 
     while (true) {
+        uint8_t *frame_copy = NULL;
+        size_t frame_len = 0;
+
+        if (!camera_manager_take_mutex(pdMS_TO_TICKS(CAMERA_MANAGER_MUTEX_TIMEOUT_MS))) {
+            ESP_LOGW(TAG, "Frame stream saltato: camera occupata");
+            s_stream_active = false;
+            return ESP_ERR_TIMEOUT;
+        }
+
         camera_fb_t *fb = esp_camera_fb_get();
         if (fb == NULL) {
             ESP_LOGW(TAG, "Frame stream non disponibile");
+            camera_manager_give_mutex();
             s_stream_active = false;
             return ESP_FAIL;
         }
 
-        if (fb->format != PIXFORMAT_JPEG) {
+        if (fb->format != PIXFORMAT_JPEG || !camera_is_valid_jpeg(fb)) {
+            camera_manager_log_frame_bytes("Frame stream JPEG non valido", fb);
             esp_camera_fb_return(fb);
+            camera_manager_give_mutex();
             s_stream_active = false;
             return ESP_ERR_NOT_SUPPORTED;
         }
 
-        char header[64] = {0};
-        int header_len = snprintf(header, sizeof(header), STREAM_PART_HEADER, (unsigned int)fb->len);
-
-        err = httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY));
-        if (err == ESP_OK) {
-            err = httpd_resp_send_chunk(req, header, header_len);
-        }
-        if (err == ESP_OK) {
-            err = httpd_resp_send_chunk(req, (const char *)fb->buf, fb->len);
+        frame_copy = malloc(fb->len);
+        if (frame_copy == NULL) {
+            ESP_LOGW(TAG, "Memoria insufficiente per frame stream (%u bytes)", (unsigned int)fb->len);
+            esp_camera_fb_return(fb);
+            camera_manager_give_mutex();
+            s_stream_active = false;
+            return ESP_ERR_NO_MEM;
         }
 
+        frame_len = fb->len;
+        memcpy(frame_copy, fb->buf, frame_len);
         esp_camera_fb_return(fb);
+        camera_manager_give_mutex();
+
+        err = camera_manager_send_frame_chunked(req, frame_copy, frame_len);
+        free(frame_copy);
 
         if (err != ESP_OK) {
             ESP_LOGI(TAG, "Client stream disconnesso: %s", esp_err_to_name(err));
@@ -327,11 +470,13 @@ static esp_err_t camera_manager_start_stream_server(void)
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.stack_size = CAMERA_MANAGER_STREAM_STACK_SIZE;
     config.server_port = CAMERA_MANAGER_STREAM_PORT;
-    config.ctrl_port = CAMERA_MANAGER_STREAM_PORT + 1;
+    config.ctrl_port = CAMERA_MANAGER_STREAM_CTRL_PORT;
     config.max_open_sockets = CAMERA_MANAGER_STREAM_MAX_OPEN_SOCKETS;
     config.lru_purge_enable = true;
     config.send_wait_timeout = CAMERA_MANAGER_STREAM_SEND_WAIT_TIMEOUT_SEC;
+    config.recv_wait_timeout = CAMERA_MANAGER_STREAM_RECV_WAIT_TIMEOUT_SEC;
 
     esp_err_t err = httpd_start(&s_stream_server, &config);
     if (err != ESP_OK) {
@@ -354,7 +499,14 @@ static esp_err_t camera_manager_start_stream_server(void)
         return err;
     }
 
-    ESP_LOGI(TAG, "Stream camera attivo su porta %d", CAMERA_MANAGER_STREAM_PORT);
+    ESP_LOGI(TAG,
+             "Stream camera attivo su porta %d ctrl_port=%d stack=%u sockets=%d timeout send/recv=%ds/%ds",
+             CAMERA_MANAGER_STREAM_PORT,
+             CAMERA_MANAGER_STREAM_CTRL_PORT,
+             (unsigned int)CAMERA_MANAGER_STREAM_STACK_SIZE,
+             CAMERA_MANAGER_STREAM_MAX_OPEN_SOCKETS,
+             CAMERA_MANAGER_STREAM_SEND_WAIT_TIMEOUT_SEC,
+             CAMERA_MANAGER_STREAM_RECV_WAIT_TIMEOUT_SEC);
     return ESP_OK;
 }
 
@@ -395,6 +547,7 @@ static esp_err_t camera_manager_init_sensor(void)
     }
 
     s_camera_ready = true;
+    camera_manager_warmup();
     ESP_ERROR_CHECK_WITHOUT_ABORT(camera_manager_apply_sensor_value("colorbar", 0));
     ESP_ERROR_CHECK_WITHOUT_ABORT(camera_manager_apply_sensor_value("awb", 1));
     ESP_ERROR_CHECK_WITHOUT_ABORT(camera_manager_apply_sensor_value("agc", 1));
@@ -412,6 +565,15 @@ esp_err_t camera_manager_init(void)
 
     camera_manager_load_defaults();
     (void)camera_manager_load_config();
+
+    if (s_camera_mutex == NULL) {
+        s_camera_mutex = xSemaphoreCreateMutex();
+        if (s_camera_mutex == NULL) {
+            ESP_LOGE(TAG, "Creazione mutex camera fallita");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
     s_initialized = true;
 
     esp_err_t camera_err = camera_manager_init_sensor();
@@ -511,7 +673,7 @@ esp_err_t camera_manager_send_status(httpd_req_t *req)
         "\"sharpness\":%d,\"special_effect\":%d,\"wb_mode\":%d,\"awb\":%d,\"awb_gain\":%d,"
         "\"aec\":%d,\"aec2\":%d,\"ae_level\":%d,\"aec_value\":%d,\"agc\":%d,\"agc_gain\":%d,"
         "\"gainceiling\":%d,\"bpc\":%d,\"wpc\":%d,\"raw_gma\":%d,\"lenc\":%d,\"hmirror\":%d,"
-        "\"dcw\":%d,\"colorbar\":%d}",
+        "\"vflip\":%d,\"dcw\":%d,\"colorbar\":%d}",
         status->framesize,
         status->quality,
         status->brightness,
@@ -534,6 +696,7 @@ esp_err_t camera_manager_send_status(httpd_req_t *req)
         status->raw_gma,
         status->lenc,
         status->hmirror,
+        status->vflip,
         status->dcw,
         status->colorbar);
 
@@ -557,28 +720,56 @@ esp_err_t camera_manager_send_capture(httpd_req_t *req)
         return ESP_ERR_INVALID_STATE;
     }
 
+    if (!camera_manager_take_mutex(pdMS_TO_TICKS(CAMERA_MANAGER_MUTEX_TIMEOUT_MS))) {
+        return camera_manager_send_busy(req);
+    }
+
     camera_fb_t *fb = esp_camera_fb_get();
     if (fb == NULL) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Capture fallita");
+        camera_manager_give_mutex();
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "camera frame timeout");
         return ESP_FAIL;
     }
 
     esp_err_t err = ESP_OK;
-    if (fb->format == PIXFORMAT_JPEG) {
-        httpd_resp_set_type(req, "image/jpeg");
-        httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-        httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.jpg");
-        err = httpd_resp_send(req, (const char *)fb->buf, fb->len);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Invio capture fallito: %s", esp_err_to_name(err));
+    uint8_t *frame_copy = NULL;
+    size_t frame_len = 0;
+    if (fb->format == PIXFORMAT_JPEG && camera_is_valid_jpeg(fb)) {
+        frame_copy = malloc(fb->len);
+        if (frame_copy == NULL) {
+            ESP_LOGW(TAG, "Memoria insufficiente per capture (%u bytes)", (unsigned int)fb->len);
+            err = ESP_ERR_NO_MEM;
+        } else {
+            frame_len = fb->len;
+            memcpy(frame_copy, fb->buf, frame_len);
         }
     } else {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Formato capture non JPEG");
+        camera_manager_log_frame_bytes("Capture JPEG non valida", fb);
         err = ESP_FAIL;
     }
 
     ESP_LOGI(TAG, "Capture %u bytes", (unsigned int)fb->len);
     esp_camera_fb_return(fb);
+    camera_manager_give_mutex();
+
+    if (err == ESP_ERR_NO_MEM) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memoria capture insufficiente");
+        return err;
+    }
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "JPEG capture non valido");
+        return err;
+    }
+
+    httpd_resp_set_type(req, "image/jpeg");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.jpg");
+    err = httpd_resp_send(req, (const char *)frame_copy, frame_len);
+    free(frame_copy);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Invio capture fallito: %s", esp_err_to_name(err));
+    }
+
     return err;
 }
 
