@@ -32,7 +32,7 @@ AntiFrost/
     system_monitor/
     dht_sensor/
     fan_control/
-    ir_led_control/
+    led_control/
     camera_manager/
     image_analysis/
     sd_storage/
@@ -106,11 +106,11 @@ Regole iniziali:
 
 La cattura immagini e l'analisi immagini sono responsabilita' separate.
 
-`camera_manager` gestisce inizializzazione camera, cattura frame e rilascio buffer. `image_analysis` riceve frame o file immagine e produce metriche utili alla logica AntiFrost: variazioni nel tempo, opacita', contrasto, riflessione IR e possibili indicatori di ghiaccio o condensa.
+`camera_manager` gestisce inizializzazione camera, warmup, cattura frame, validazione JPEG e rilascio buffer. L'accesso a `esp_camera_fb_get()` e' serializzato da mutex, cosi' capture e stream non competono sullo stesso frame buffer. `image_analysis` riceve frame o file immagine e produce metriche utili alla logica AntiFrost: variazioni nel tempo, opacita', contrasto, riflessione LED e possibili indicatori di ghiaccio o condensa.
 
 Regole iniziali:
 
-- acquisire immagini confrontabili tra loro, con condizioni IR controllate e metadati temporali;
+- acquisire immagini confrontabili tra loro, con condizioni LED controllate e metadati temporali;
 - mantenere algoritmi e soglie separati dalla cattura camera;
 - salvare metriche e risultati sintetici nei log applicativi;
 - evitare elaborazioni pesanti nel task camera se possono bloccare acquisizione o web server;

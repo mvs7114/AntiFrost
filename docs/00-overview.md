@@ -7,8 +7,8 @@ Il firmware usa ESP-IDF tramite PlatformIO, senza dipendenze Arduino. Lo svilupp
 ## Obiettivi
 
 - Monitorare temperatura e umidita'.
-- Attivare azioni anticondensa e antighiaccio tramite ventola, LED IR o altri attuatori.
-- Analizzare immagini nel tempo, anche illuminate da IR, per stimare opacita', condensa, brina o ghiaccio.
+- Attivare azioni anticondensa e antighiaccio tramite ventola, LED o altri attuatori.
+- Analizzare immagini nel tempo, anche illuminate da LED, per stimare opacita', condensa, brina o ghiaccio.
 - Rendere disponibile diagnostica di sistema su seriale, su file di log SD e, in seguito, via web.
 - Supportare camera, storage SD/FAT, Wi-Fi e OTA in fasi successive.
 - Mantenere il codice modulare, verificabile e adatto a crescita progressiva.

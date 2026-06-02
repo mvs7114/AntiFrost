@@ -3,119 +3,151 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AntiFrost</title>
-  <style>
-    :root {
-      color-scheme: light;
-      --bg: #f7f8fa;
-      --panel: #ffffff;
-      --text: #17202a;
-      --muted: #51606f;
-      --line: #d8dee6;
-      --accent: #1976d2;
-      --ok: #1f8a5b;
-    }
-
-    * {
-      box-sizing: border-box;
-    }
-
-    body {
-      margin: 0;
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      background: var(--bg);
-      color: var(--text);
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-
-    main {
-      width: min(36rem, calc(100vw - 2rem));
-      padding: 2rem;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: var(--panel);
-    }
-
-    h1 {
-      margin: 0 0 0.75rem;
-      font-size: clamp(2rem, 8vw, 3.5rem);
-      line-height: 1;
-      letter-spacing: 0;
-    }
-
-    p {
-      margin: 0.5rem 0;
-      color: var(--muted);
-      font-size: 1rem;
-      line-height: 1.5;
-    }
-
-    .status {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      margin-top: 1.25rem;
-      padding-top: 1rem;
-      border-top: 1px solid var(--line);
-      color: var(--ok);
-      font-weight: 600;
-    }
-
-    .dot {
-      width: 0.625rem;
-      height: 0.625rem;
-      border-radius: 999px;
-      background: currentColor;
-    }
-
-    .wifi-state {
-      margin-top: 1rem;
-      padding: 0.85rem 1rem;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      background: #f9fbfd;
-    }
-
-    .wifi-state strong {
-      color: var(--text);
-    }
-  </style>
+  <title>AntiFrost Dashboard</title>
+  <link rel="stylesheet" href="/camera.css">
 </head>
 <body>
-  <main>
-    <h1>AntiFrost</h1>
-    <p>Firmware avviato.</p>
-    <p>Interfaccia web base attiva.</p>
-    <p><a href="/setup.html">Configura Wi-Fi</a></p>
-    <p><a href="/wifi.html">Gestisci Wi-Fi</a></p>
-    <div class="wifi-state" id="wifi-state">Stato Wi-Fi: caricamento...</div>
-    <div class="status"><span class="dot"></span><span>Online</span></div>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <h1>AntiFrost</h1>
+        <p>Dashboard operativa · build <span id="build-version">...</span></p>
+      </div>
+      <nav>
+        <a href="/camera">Camera</a>
+        <a href="/led">LED</a>
+        <a href="/wifi.html">Stato Wi-Fi</a>
+        <a href="/setup.html">Configura Wi-Fi</a>
+        <button type="button" class="secondary" onclick="location.reload()">Aggiorna</button>
+      </nav>
+    </header>
+
+    <section class="grid">
+      <article class="card">
+        <h2>Stato sistema</h2>
+        <div class="pill"><span class="dot"></span><span id="system-online">Online</span></div>
+        <div class="metric"><span>Modalita Wi-Fi</span><strong id="wifi-mode">...</strong></div>
+        <div class="metric"><span>Stato Wi-Fi</span><strong id="wifi-state">...</strong></div>
+        <div class="metric"><span>IP</span><strong id="wifi-ip">...</strong></div>
+      </article>
+
+      <article class="card">
+        <h2>Sensori</h2>
+        <div class="metric"><span>Temperatura</span><strong id="sensor-temp">n/d</strong></div>
+        <div class="metric"><span>Umidita</span><strong id="sensor-humidity">n/d</strong></div>
+      </article>
+
+      <article class="card">
+        <h2>Ventola</h2>
+        <div class="metric"><span>Stato</span><strong id="fan-state">n/d</strong></div>
+        <div class="metric"><span>Duty</span><strong id="fan-duty">n/d</strong></div>
+      </article>
+
+      <article class="card">
+        <h2>LED</h2>
+        <div class="metric"><span>Stato</span><strong id="led-state">n/d</strong></div>
+        <div class="actions"><a href="/led">LED</a></div>
+      </article>
+
+      <article class="card">
+        <h2>Camera</h2>
+        <div class="metric"><span>Status</span><strong id="camera-state">...</strong></div>
+        <div class="metric"><span>Frame</span><strong id="camera-frame">n/d</strong></div>
+        <div class="actions"><a href="/camera">Camera</a></div>
+      </article>
+
+      <article class="card">
+        <h2>Log</h2>
+        <div class="metric"><span>Persistenza</span><strong id="log-state">SD se disponibile</strong></div>
+        <div class="metric"><span>Ultimo evento</span><strong id="log-last">n/d</strong></div>
+      </article>
+    </section>
   </main>
+
   <script>
+    const frameSizeLabels = new Map([
+      [0, "96x96"], [1, "QQVGA 160x120"], [2, "128x128"], [3, "QCIF 176x144"],
+      [4, "HQVGA 240x176"], [5, "240x240"], [6, "QVGA 320x240"],
+      [7, "320x320"], [8, "CIF 400x296"], [9, "HVGA 480x320"],
+      [10, "VGA 640x480"], [11, "SVGA 800x600"], [12, "XGA 1024x768"],
+      [13, "HD 1280x720"], [14, "SXGA 1280x1024"], [15, "UXGA 1600x1200"],
+      [16, "FHD 1920x1080"], [17, "P HD 720x1280"], [18, "P 3MP 864x1536"],
+      [19, "QXGA 2048x1536"]
+    ]);
+
+    function formatFrameSize(value) {
+      return frameSizeLabels.get(Number(value)) || "n/d";
+    }
+
+    async function loadSystemStatus() {
+      try {
+        const response = await fetch("/api/system/status", { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("system " + response.status);
+        }
+        const data = await response.json();
+        document.getElementById("build-version").textContent = data.version || "n/d";
+      } catch (error) {
+        document.getElementById("build-version").textContent = "n/d";
+      }
+    }
+
     async function loadWifiStatus() {
-      const el = document.getElementById("wifi-state");
       try {
         const response = await fetch("/api/wifi/status", { cache: "no-store" });
         if (!response.ok) {
-          throw new Error("status " + response.status);
+          throw new Error("wifi " + response.status);
         }
         const data = await response.json();
         const mode = data.mode || "UNKNOWN";
         const state = data.state || "UNKNOWN";
         const ip = mode === "SOFTAP" ? data.softap?.ip : data.sta?.ip;
-        const shownIp = ip && ip.length > 0 ? ip : "n/d";
-        el.innerHTML = "<strong>Modalita:</strong> " + mode +
-          " | <strong>Stato:</strong> " + state +
-          " | <strong>IP:</strong> " + shownIp;
+        document.getElementById("wifi-mode").textContent = mode;
+        document.getElementById("wifi-state").textContent = state;
+        document.getElementById("wifi-ip").textContent = ip && ip.length > 0 ? ip : "n/d";
       } catch (error) {
-        el.textContent = "Stato Wi-Fi non disponibile.";
+        document.getElementById("wifi-state").textContent = "non disponibile";
       }
     }
 
+    async function loadCameraStatus() {
+      try {
+        const response = await fetch("/status", { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("camera " + response.status);
+        }
+        const data = await response.json();
+        document.getElementById("camera-state").textContent = "OK";
+        document.getElementById("camera-frame").textContent =
+          data.framesize !== undefined ? formatFrameSize(data.framesize) : "n/d";
+      } catch (error) {
+        document.getElementById("camera-state").textContent = "non disponibile";
+        document.getElementById("camera-state").className = "warn";
+      }
+    }
+
+    async function loadLedStatus() {
+      try {
+        const response = await fetch("/api/led/status", { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("led " + response.status);
+        }
+        const data = await response.json();
+        const enabled = data.enabled;
+        document.getElementById("led-state").textContent =
+          enabled === true ? "ON" : enabled === false ? "OFF" : "n/d";
+      } catch (error) {
+        document.getElementById("led-state").textContent = "n/d";
+      }
+    }
+
+    loadSystemStatus();
     loadWifiStatus();
+    loadCameraStatus();
+    loadLedStatus();
     setInterval(loadWifiStatus, 5000);
+    setInterval(loadCameraStatus, 5000);
+    setInterval(loadLedStatus, 5000);
   </script>
 </body>
 </html>

@@ -4,7 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "board_config.h"
 #include "camera_manager.h"
+#include "driver/gpio.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -13,7 +15,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "ir_led_control.h"
+#include "led_control.h"
 #include "wear_levelling.h"
 #include "wifi_manager.h"
 
@@ -22,9 +24,8 @@ static const char *TAG = "web_server";
 #define WEB_SERVER_MOUNT_POINT "/www"
 #define WEB_SERVER_PARTITION_LABEL "storage"
 #define WEB_SERVER_MAX_PATH_LEN 160
-#define WEB_SERVER_FILE_BUFFER_SIZE 512
+#define WEB_SERVER_FILE_BUFFER_SIZE 1024
 #define WEB_SERVER_MAX_STATIC_FILE_SIZE 65536
-#define WEB_SERVER_SINGLE_SEND_MAX_BYTES 8192
 #define WEB_SERVER_FORM_BUFFER_SIZE 256
 #define WEB_SERVER_QUERY_BUFFER_SIZE 192
 #define WEB_SERVER_QUERY_VALUE_SIZE 64
@@ -33,10 +34,17 @@ static const char *TAG = "web_server";
 #define WEB_SERVER_PASSWORD_BUFFER_SIZE 65
 #define WEB_SERVER_WIFI_APPLY_DELAY_MS 1500
 #define WEB_SERVER_RESTART_DELAY_MS 1500
-#define WEB_SERVER_MAX_URI_HANDLERS 16
-#define WEB_SERVER_MAX_OPEN_SOCKETS 5
-#define WEB_SERVER_RECV_WAIT_TIMEOUT_SEC 10
-#define WEB_SERVER_SEND_WAIT_TIMEOUT_SEC 30
+#define WEB_SERVER_MAX_URI_HANDLERS 20
+#define WEB_SERVER_CTRL_PORT 32768
+#define WEB_SERVER_STACK_SIZE 8192
+#define WEB_SERVER_MAX_OPEN_SOCKETS 7
+#define WEB_SERVER_RECV_WAIT_TIMEOUT_SEC 5
+#define WEB_SERVER_SEND_WAIT_TIMEOUT_SEC 5
+#define WEB_SERVER_SEND_BUDGET_MS (WEB_SERVER_SEND_WAIT_TIMEOUT_SEC * 1000)
+
+#ifndef ANTIFROST_BUILD_VERSION
+#define ANTIFROST_BUILD_VERSION "dev"
+#endif
 
 typedef struct {
     char ssid[WEB_SERVER_SSID_BUFFER_SIZE];
@@ -245,6 +253,24 @@ static bool web_server_string_is_true(const char *value)
            strcmp(value, "yes") == 0;
 }
 
+static esp_err_t web_server_system_status_get_handler(httpd_req_t *req)
+{
+    char response[160] = {0};
+    int len = snprintf(response,
+                       sizeof(response),
+                       "{\"version\":\"%s\",\"build_date\":\"%s\",\"build_time\":\"%s\"}",
+                       ANTIFROST_BUILD_VERSION,
+                       __DATE__,
+                       __TIME__);
+    if (len <= 0 || (size_t)len >= sizeof(response)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Status sistema troppo lungo");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, response, len);
+}
+
 static esp_err_t web_server_camera_params_get_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "HTTP camera parameters");
@@ -372,16 +398,16 @@ static esp_err_t web_server_camera_capture_get_handler(httpd_req_t *req)
     return camera_manager_send_capture(req);
 }
 
-static esp_err_t web_server_ir_status_get_handler(httpd_req_t *req)
+static esp_err_t web_server_led_status_get_handler(httpd_req_t *req)
 {
-    bool enabled = ir_led_control_is_enabled();
+    bool enabled = led_control_is_enabled();
     char response[32] = {0};
     int len = snprintf(response,
                        sizeof(response),
                        "{\"enabled\":%s}",
                        enabled ? "true" : "false");
     if (len <= 0 || (size_t)len >= sizeof(response)) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Status IR troppo lungo");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Status LED troppo lungo");
         return ESP_FAIL;
     }
 
@@ -389,22 +415,65 @@ static esp_err_t web_server_ir_status_get_handler(httpd_req_t *req)
     return httpd_resp_send(req, response, len);
 }
 
-static esp_err_t web_server_ir_control_get_handler(httpd_req_t *req)
+static esp_err_t web_server_led_control_get_handler(httpd_req_t *req)
 {
     char enabled_text[WEB_SERVER_QUERY_VALUE_SIZE] = {0};
     esp_err_t err = web_server_query_value(req, "enabled", enabled_text, sizeof(enabled_text));
     if (err != ESP_OK || enabled_text[0] == '\0') {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Parametro IR mancante");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Parametro LED mancante");
         return ESP_ERR_INVALID_ARG;
     }
 
-    err = ir_led_control_set_enabled(web_server_string_is_true(enabled_text));
+    err = led_control_set_enabled(web_server_string_is_true(enabled_text));
     if (err != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Comando IR fallito");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Comando LED fallito");
         return err;
     }
 
-    return web_server_ir_status_get_handler(req);
+    return web_server_led_status_get_handler(req);
+}
+
+static esp_err_t web_server_test_status_get_handler(httpd_req_t *req)
+{
+    char response[80] = {0};
+    int len = snprintf(response,
+                       sizeof(response),
+                       "{\"gpio2\":%d}",
+                       gpio_get_level(BOARD_GPIO2_TEST_GPIO));
+    if (len <= 0 || (size_t)len >= sizeof(response)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Status test troppo lungo");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, response, len);
+}
+
+static esp_err_t web_server_test_gpio_control_get_handler(httpd_req_t *req)
+{
+    char target[WEB_SERVER_QUERY_VALUE_SIZE] = {0};
+    char level_text[WEB_SERVER_QUERY_VALUE_SIZE] = {0};
+
+    esp_err_t err = web_server_query_value(req, "target", target, sizeof(target));
+    if (err != ESP_OK || strcmp(target, "gpio2") != 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Target test non valido");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = web_server_query_value(req, "level", level_text, sizeof(level_text));
+    if (err != ESP_OK || level_text[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Livello test mancante");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    int level = web_server_string_is_true(level_text) ? 1 : 0;
+    err = gpio_set_level(BOARD_GPIO2_TEST_GPIO, level);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Comando test GPIO fallito");
+        return err;
+    }
+
+    return web_server_test_status_get_handler(req);
 }
 
 static esp_err_t web_server_camera_profile_post_handler(httpd_req_t *req)
@@ -731,6 +800,12 @@ static esp_err_t web_server_build_file_path(const httpd_req_t *req,
     } else if (uri_len == strlen("/camera") && strncmp(uri, "/camera", uri_len) == 0) {
         uri = "/camera.html";
         uri_len = strlen(uri);
+    } else if (uri_len == strlen("/led") && strncmp(uri, "/led", uri_len) == 0) {
+        uri = "/led.html";
+        uri_len = strlen(uri);
+    } else if (uri_len == strlen("/test") && strncmp(uri, "/test", uri_len) == 0) {
+        uri = "/test.html";
+        uri_len = strlen(uri);
     }
 
     if (uri_len == 0 || uri[0] != '/' || strstr(uri, "..") != NULL) {
@@ -783,56 +858,6 @@ static esp_err_t web_server_send_file(httpd_req_t *req, const char *path)
     }
 
     int64_t stat_done_ms = web_server_now_ms();
-    if (file_size <= WEB_SERVER_SINGLE_SEND_MAX_BYTES) {
-        char *body = malloc((size_t)file_size);
-        if (body == NULL) {
-            fclose(file);
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memoria file insufficiente");
-            return ESP_ERR_NO_MEM;
-        }
-
-        size_t read_len = fread(body, 1, (size_t)file_size, file);
-        fclose(file);
-        if (read_len != (size_t)file_size) {
-            free(body);
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Lettura file incompleta");
-            return ESP_FAIL;
-        }
-
-        char content_length[16] = {0};
-        int content_length_len = snprintf(content_length, sizeof(content_length), "%ld", file_size);
-        if (content_length_len <= 0 || (size_t)content_length_len >= sizeof(content_length)) {
-            free(body);
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "File troppo grande");
-            return ESP_FAIL;
-        }
-
-        httpd_resp_set_type(req, web_server_content_type(path));
-        httpd_resp_set_hdr(req, "Content-Length", content_length);
-        httpd_resp_set_hdr(req, "Connection", "close");
-
-        esp_err_t send_err = httpd_resp_send(req, body, read_len);
-        free(body);
-        int64_t done_ms = web_server_now_ms();
-        if (send_err != ESP_OK) {
-            ESP_LOGW(TAG,
-                     "Invio file piccolo %s fallito (%ld bytes): %s timing open/stat=%lldms total=%lldms",
-                     path,
-                     file_size,
-                     esp_err_to_name(send_err),
-                     (long long)(stat_done_ms - start_ms),
-                     (long long)(done_ms - start_ms));
-            return send_err;
-        }
-
-        ESP_LOGI(TAG,
-                 "HTTP sent %s (%ld bytes) mode=single timing open/stat=%lldms total=%lldms",
-                 path,
-                 file_size,
-                 (long long)(stat_done_ms - start_ms),
-                 (long long)(done_ms - start_ms));
-        return ESP_OK;
-    }
 
     char *buffer = malloc(WEB_SERVER_FILE_BUFFER_SIZE);
     if (buffer == NULL) {
@@ -842,37 +867,61 @@ static esp_err_t web_server_send_file(httpd_req_t *req, const char *path)
     }
 
     httpd_resp_set_type(req, web_server_content_type(path));
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_hdr(req, "Connection", "close");
 
     size_t total_sent = 0;
+    unsigned int chunks = 0;
     esp_err_t err = ESP_OK;
-    int64_t first_send_start_ms = 0;
+    int64_t read_total_ms = 0;
+    int64_t send_total_ms = 0;
     while (total_sent < (size_t)file_size) {
+        int64_t read_start_ms = web_server_now_ms();
         size_t read_len = fread(buffer, 1, WEB_SERVER_FILE_BUFFER_SIZE, file);
+        int64_t read_done_ms = web_server_now_ms();
+        read_total_ms += read_done_ms - read_start_ms;
         if (read_len == 0) {
             err = ferror(file) ? ESP_FAIL : ESP_OK;
             break;
         }
 
-        if (first_send_start_ms == 0) {
-            first_send_start_ms = web_server_now_ms();
-        }
+        int64_t send_start_ms = web_server_now_ms();
         err = httpd_resp_send_chunk(req, buffer, read_len);
+        int64_t send_done_ms = web_server_now_ms();
+        send_total_ms += send_done_ms - send_start_ms;
         if (err != ESP_OK) {
-            int64_t fail_ms = web_server_now_ms();
             ESP_LOGW(TAG,
-                     "Invio file %s fallito dopo %u/%ld bytes: %s timing open/stat=%lldms send=%lldms total=%lldms",
+                     "Invio file %s fallito dopo %u/%ld bytes: %s timing open/stat=%lldms read=%lldms send=%lldms total=%lldms chunks=%u bytes=%u",
                      path,
                      (unsigned int)total_sent,
                      file_size,
                      esp_err_to_name(err),
                      (long long)(stat_done_ms - start_ms),
-                     (long long)(fail_ms - first_send_start_ms),
-                     (long long)(fail_ms - start_ms));
+                     (long long)read_total_ms,
+                     (long long)send_total_ms,
+                     (long long)(send_done_ms - start_ms),
+                     chunks,
+                     (unsigned int)total_sent);
             break;
         }
 
         total_sent += read_len;
+        chunks++;
+        if (send_total_ms > WEB_SERVER_SEND_BUDGET_MS) {
+            ESP_LOGW(TAG,
+                     "Invio file %s interrotto per budget send dopo %u/%ld bytes timing open/stat=%lldms read=%lldms send=%lldms total=%lldms chunks=%u bytes=%u",
+                     path,
+                     (unsigned int)total_sent,
+                     file_size,
+                     (long long)(stat_done_ms - start_ms),
+                     (long long)read_total_ms,
+                     (long long)send_total_ms,
+                     (long long)(send_done_ms - start_ms),
+                     chunks,
+                     (unsigned int)total_sent);
+            err = ESP_ERR_TIMEOUT;
+            break;
+        }
     }
 
     fclose(file);
@@ -895,12 +944,15 @@ static esp_err_t web_server_send_file(httpd_req_t *req, const char *path)
 
     int64_t done_ms = web_server_now_ms();
     ESP_LOGI(TAG,
-             "HTTP sent %s (%ld bytes) timing open/stat=%lldms send=%lldms total=%lldms",
+             "HTTP sent %s (%ld bytes) mode=chunked timing open/stat=%lldms read=%lldms send=%lldms total=%lldms chunks=%u bytes=%u",
              path,
              file_size,
              (long long)(stat_done_ms - start_ms),
-             first_send_start_ms == 0 ? 0 : (long long)(done_ms - first_send_start_ms),
-             (long long)(done_ms - start_ms));
+             (long long)read_total_ms,
+             (long long)send_total_ms,
+             (long long)(done_ms - start_ms),
+             chunks,
+             (unsigned int)total_sent);
     return ESP_OK;
 }
 
@@ -956,6 +1008,8 @@ esp_err_t web_server_start(void)
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.stack_size = WEB_SERVER_STACK_SIZE;
+    config.ctrl_port = WEB_SERVER_CTRL_PORT;
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.max_uri_handlers = WEB_SERVER_MAX_URI_HANDLERS;
     config.max_open_sockets = WEB_SERVER_MAX_OPEN_SOCKETS;
@@ -1000,6 +1054,13 @@ esp_err_t web_server_start(void)
         .user_ctx = NULL,
     };
 
+    const httpd_uri_t system_status_get = {
+        .uri = "/api/system/status",
+        .method = HTTP_GET,
+        .handler = web_server_system_status_get_handler,
+        .user_ctx = NULL,
+    };
+
     const httpd_uri_t camera_params_get = {
         .uri = "/api/camera/parameters",
         .method = HTTP_GET,
@@ -1028,17 +1089,38 @@ esp_err_t web_server_start(void)
         .user_ctx = NULL,
     };
 
-    const httpd_uri_t ir_status_get = {
-        .uri = "/api/ir/status",
+    const httpd_uri_t camera_capture_alias_get = {
+        .uri = "/camera/capture",
         .method = HTTP_GET,
-        .handler = web_server_ir_status_get_handler,
+        .handler = web_server_camera_capture_get_handler,
         .user_ctx = NULL,
     };
 
-    const httpd_uri_t ir_control_get = {
-        .uri = "/api/ir/control",
+    const httpd_uri_t led_status_get = {
+        .uri = "/api/led/status",
         .method = HTTP_GET,
-        .handler = web_server_ir_control_get_handler,
+        .handler = web_server_led_status_get_handler,
+        .user_ctx = NULL,
+    };
+
+    const httpd_uri_t led_control_get = {
+        .uri = "/api/led/control",
+        .method = HTTP_GET,
+        .handler = web_server_led_control_get_handler,
+        .user_ctx = NULL,
+    };
+
+    const httpd_uri_t test_status_get = {
+        .uri = "/api/test/status",
+        .method = HTTP_GET,
+        .handler = web_server_test_status_get_handler,
+        .user_ctx = NULL,
+    };
+
+    const httpd_uri_t test_gpio_control_get = {
+        .uri = "/api/test/gpio/control",
+        .method = HTTP_GET,
+        .handler = web_server_test_gpio_control_get_handler,
         .user_ctx = NULL,
     };
 
@@ -1087,6 +1169,14 @@ esp_err_t web_server_start(void)
         return err;
     }
 
+    err = httpd_register_uri_handler(s_server, &system_status_get);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Registrazione handler stato sistema fallita: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
+
     err = httpd_register_uri_handler(s_server, &camera_params_get);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Registrazione handler parametri camera fallita: %s", esp_err_to_name(err));
@@ -1119,17 +1209,41 @@ esp_err_t web_server_start(void)
         return err;
     }
 
-    err = httpd_register_uri_handler(s_server, &ir_status_get);
+    err = httpd_register_uri_handler(s_server, &camera_capture_alias_get);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Registrazione handler stato IR fallita: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Registrazione handler alias capture camera fallita: %s", esp_err_to_name(err));
         httpd_stop(s_server);
         s_server = NULL;
         return err;
     }
 
-    err = httpd_register_uri_handler(s_server, &ir_control_get);
+    err = httpd_register_uri_handler(s_server, &led_status_get);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Registrazione handler controllo IR fallita: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Registrazione handler stato LED fallita: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
+
+    err = httpd_register_uri_handler(s_server, &led_control_get);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Registrazione handler controllo LED fallita: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
+
+    err = httpd_register_uri_handler(s_server, &test_status_get);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Registrazione handler stato test fallita: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
+
+    err = httpd_register_uri_handler(s_server, &test_gpio_control_get);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Registrazione handler controllo GPIO test fallita: %s", esp_err_to_name(err));
         httpd_stop(s_server);
         s_server = NULL;
         return err;
@@ -1167,7 +1281,14 @@ esp_err_t web_server_start(void)
         return err;
     }
 
-    ESP_LOGI(TAG, "HTTP server avviato");
+    ESP_LOGI(TAG,
+             "HTTP server avviato su porta %d ctrl_port=%d stack=%u sockets=%d timeout send/recv=%ds/%ds",
+             config.server_port,
+             WEB_SERVER_CTRL_PORT,
+             (unsigned int)WEB_SERVER_STACK_SIZE,
+             WEB_SERVER_MAX_OPEN_SOCKETS,
+             WEB_SERVER_SEND_WAIT_TIMEOUT_SEC,
+             WEB_SERVER_RECV_WAIT_TIMEOUT_SEC);
     return ESP_OK;
 }
 

@@ -53,7 +53,7 @@ Dal pinout Freenove ESP32-S3 WROOM:
 
 - Sensore temperatura/umidita' DHT.
 - Ventola controllata in PWM.
-- LED IR controllati via GPIO o driver dedicato.
+- LED controllati via GPIO o driver dedicato.
 - LED di stato WS2812 onboard.
 - Camera ESP32.
 - Storage SD o FAT, secondo cablaggio e necessita'.

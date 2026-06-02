@@ -6,7 +6,7 @@
 
 #include "app_logger.h"
 #include "board_config.h"
-#include "ir_led_control.h"
+#include "led_control.h"
 #include "sd_storage.h"
 #include "system_services.h"
 #include "system_monitor.h"
@@ -27,7 +27,7 @@ void app_main(void)
 #endif
 
     ESP_ERROR_CHECK(board_gpio_init());
-    ESP_ERROR_CHECK(ir_led_control_init());
+    ESP_ERROR_CHECK(led_control_init());
     ESP_ERROR_CHECK(system_services_init());
     ESP_ERROR_CHECK(sys_monitor_init());
 

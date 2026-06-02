@@ -70,19 +70,19 @@ esp_err_t fan_init(void);
 esp_err_t fan_set_speed(uint8_t speed_percent);
 ```
 
-## ir_led_control
+## led_control
 
 Responsabilita':
 
-- inizializzare controllo LED IR;
-- accendere/spegnere LED IR;
+- inizializzare controllo LED;
+- accendere/spegnere LED;
 - in seguito gestire duty cycle o sicurezza termica.
 
 API prevista:
 
 ```c
-esp_err_t ir_led_init(void);
-esp_err_t ir_led_set_state(bool enabled);
+esp_err_t led_init(void);
+esp_err_t led_set_state(bool enabled);
 ```
 
 ## app_logger
@@ -119,7 +119,7 @@ timestamp_ms;level;source;message
 Responsabilita':
 
 - confrontare immagini catturate in istanti temporali diversi;
-- analizzare immagini illuminate da LED IR con condizioni ripetibili;
+- analizzare immagini illuminate da LED con condizioni ripetibili;
 - calcolare metriche di differenza, opacita', contrasto e variazione locale;
 - predisporre analisi in frequenza, analisi sottrattiva e modelli specifici per condensa/ghiaccio;
 - produrre un risultato sintetico consumabile da `antifrost_logic`;
@@ -128,7 +128,7 @@ Responsabilita':
 Dipendenze previste:
 
 - `camera_manager` per frame o file immagine acquisiti;
-- `ir_led_control` per sincronizzare acquisizioni con illuminazione IR;
+- `led_control` per sincronizzare acquisizioni con illuminazione LED;
 - `sd_storage` per leggere/scrivere immagini campione o snapshot diagnostici;
 - `app_logger` per salvare evidenze e metriche;
 - `system_monitor` per controllare heap/PSRAM prima di elaborazioni pesanti.
@@ -157,7 +157,7 @@ Note implementative:
 
 - iniziare con immagini grayscale o luminanza estratta dal JPEG, per ridurre memoria e CPU;
 - conservare un frame baseline valido e confrontarlo con frame successivi;
-- loggare sempre parametri di acquisizione: timestamp, IR on/off, esposizione se disponibile, dimensione frame;
+- loggare sempre parametri di acquisizione: timestamp, LED on/off, esposizione se disponibile, dimensione frame;
 - rinviare modelli piu' pesanti finche' non sono noti tempi CPU, memoria e qualita' dei frame reali.
 
 ## Moduli Successivi
@@ -173,3 +173,18 @@ Note implementative:
 - `antifrost_logic`
 
 Questi moduli saranno introdotti dopo i test hardware base.
+
+## camera_manager
+
+Responsabilita':
+
+- inizializzare OV3660 con configurazione prudente: JPEG, QVGA, fb_count=1, frame buffer in PSRAM e XCLK 10 MHz;
+- eseguire warmup scartando e loggando 10 frame dopo `esp_camera_init()`;
+- validare i marker JPEG SOI `FF D8` ed EOI `FF D9` prima di inviare capture o stream;
+- serializzare l'accesso alla camera con mutex, evitando chiamate concorrenti a `esp_camera_fb_get()`;
+- rilasciare sempre il frame buffer prima di liberare il mutex;
+- mantenere lo stream separato su porta 81 e l'endpoint capture sul web server principale.
+
+Nota:
+
+- la UI non deve avviare automaticamente capture al caricamento pagina e non deve usare polling `/capture` come fallback live quando lo stream e' attivo.

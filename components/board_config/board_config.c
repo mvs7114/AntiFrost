@@ -22,7 +22,7 @@ esp_err_t board_gpio_init(void)
     }
 
     gpio_config_t output_config = {
-        .pin_bit_mask = BIT64(BOARD_FAN_PWM_GPIO) | BIT64(BOARD_IR_LED_GPIO),
+        .pin_bit_mask = BIT64(BOARD_FAN_PWM_GPIO) | BIT64(BOARD_LED_GPIO) | BIT64(BOARD_GPIO2_TEST_GPIO),
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -36,11 +36,12 @@ esp_err_t board_gpio_init(void)
     }
 
     ESP_ERROR_CHECK_WITHOUT_ABORT(gpio_set_level(BOARD_FAN_PWM_GPIO, 0));
-    ESP_ERROR_CHECK_WITHOUT_ABORT(gpio_set_level(BOARD_IR_LED_GPIO, 0));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(gpio_set_level(BOARD_LED_GPIO, 0));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(gpio_set_level(BOARD_GPIO2_TEST_GPIO, 0));
 
     ESP_LOGI(TAG, "Board: %s", BOARD_NAME);
-    ESP_LOGI(TAG, "GPIO riservati: DHT11=%d, Fan PWM=%d, IR LED=%d",
-             BOARD_DHT11_GPIO, BOARD_FAN_PWM_GPIO, BOARD_IR_LED_GPIO);
+    ESP_LOGI(TAG, "GPIO riservati: DHT11=%d, Fan PWM=%d, LED=%d, GPIO2 test=%d",
+             BOARD_DHT11_GPIO, BOARD_FAN_PWM_GPIO, BOARD_LED_GPIO, BOARD_GPIO2_TEST_GPIO);
 
     return ESP_OK;
 }

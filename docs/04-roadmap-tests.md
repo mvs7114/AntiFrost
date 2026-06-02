@@ -32,7 +32,7 @@ Obiettivo:
 - testare 0%, 25%, 50%, 75%, 100%;
 - verificare che il comando sia stabile.
 
-## TEST 04 - LED IR
+## TEST 04 - LED
 
 Obiettivo:
 
@@ -42,8 +42,8 @@ Obiettivo:
 
 Nota pinout:
 
-- LED IR applicativo su GPIO47;
-- WS2812 onboard di stato su GPIO48, da gestire separatamente dal LED IR.
+- LED applicativo su GPIO47;
+- WS2812 onboard di stato su GPIO48, da gestire separatamente dal LED applicativo.
 
 ## TEST 05 - Camera Init
 
@@ -58,7 +58,24 @@ Obiettivo:
 
 - catturare un frame JPEG;
 - verificare dimensione buffer;
+- validare marker JPEG SOI `FF D8` ed EOI `FF D9`;
+- proteggere ogni `esp_camera_fb_get()` con mutex e timeout breve;
 - rilasciare correttamente il frame.
+
+Matrice camera OV3660 usata per isolare il problema DMA:
+
+- A: DMA OFF, PSRAM 80 MHz, CPU 240 MHz, QVGA, fb_count=1, XCLK 10 MHz.
+- B: DMA OFF, PSRAM 80 MHz, CPU 240 MHz, QVGA, fb_count=1, XCLK 20 MHz.
+- C: DMA ON, PSRAM 80 MHz, CPU 240 MHz, QVGA, fb_count=1, XCLK 10 MHz. Non stabile nei test: frame null/timeout.
+- D: DMA ON, PSRAM 40 MHz, CPU 240 MHz, QVGA, fb_count=1, XCLK 10 MHz. Solo per verifica timing, non profilo operativo.
+
+Profilo operativo corrente:
+
+- DMA PSRAM disattivato;
+- PSRAM OPI 80 MHz;
+- CPU 240 MHz;
+- QVGA, fb_count=1, XCLK 10 MHz, JPEG quality 12;
+- `/capture` e `/stream` attivi solo con mutex e validazione JPEG.
 
 ## TEST 07 - Storage
 
@@ -113,11 +130,11 @@ Obiettivo:
 - catturare immagine da endpoint web;
 - inviare JPEG al client.
 
-## TEST 12 - Analisi Immagini IR
+## TEST 12 - Analisi Immagini LED
 
 Obiettivo:
 
-- catturare immagini in istanti temporali diversi con LED IR controllato;
+- catturare immagini in istanti temporali diversi con LED controllato;
 - confrontare baseline e immagine corrente;
 - calcolare metriche iniziali di differenza, opacita' e contrasto;
 - salvare risultati sintetici nei log applicativi;
@@ -142,7 +159,7 @@ Obiettivo:
 
 - valutare temperatura/umidita';
 - integrare metriche `image_analysis` quando disponibili;
-- attivare ventola o IR secondo soglie;
+- attivare ventola o LED secondo soglie;
 - applicare isteresi.
 
 ## TEST 14 - OTA

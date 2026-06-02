@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AntiFrost LED</title>
+  <link rel="stylesheet" href="/camera.css">
+</head>
+<body>
+  <main class="shell shell-narrow">
+    <header class="topbar">
+      <div>
+        <h1>LED</h1>
+        <p>Verifica hardware LED.</p>
+      </div>
+      <nav>
+        <a href="/">Home</a>
+        <a href="/camera">Camera</a>
+        <button type="button" class="secondary" onclick="location.reload()">Aggiorna</button>
+      </nav>
+    </header>
+
+    <section class="card page-card">
+      <div class="wifi-state">
+        Stato LED: <strong id="led-state">n/d</strong>
+      </div>
+
+      <form id="led-form">
+        <label>
+          Comando LED
+          <select id="led-enabled" name="enabled">
+            <option value="1">ON</option>
+            <option value="0">OFF</option>
+          </select>
+        </label>
+        <button type="submit" class="full">Applica</button>
+      </form>
+
+      <div class="status-line idle" id="status-line">LED: sincronizzazione...</div>
+    </section>
+  </main>
+
+  <script>
+    const ledState = document.getElementById("led-state");
+    const ledEnabled = document.getElementById("led-enabled");
+    const statusLine = document.getElementById("status-line");
+
+    function setStatus(text, mode = "idle") {
+      statusLine.textContent = text;
+      statusLine.className = `status-line ${mode}`;
+    }
+
+    function formatLedState(enabled) {
+      return enabled === true ? "ON" : enabled === false ? "OFF" : "n/d";
+    }
+
+    async function loadLedStatus() {
+      try {
+        const response = await fetch("/api/led/status", { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error(String(response.status));
+        }
+        const data = await response.json();
+        ledState.textContent = formatLedState(data.enabled);
+        if (data.enabled === true || data.enabled === false) {
+          ledEnabled.value = data.enabled ? "1" : "0";
+        }
+        setStatus("LED: stato aggiornato", "ok");
+      } catch (error) {
+        ledState.textContent = "n/d";
+        setStatus("LED: stato non disponibile", "error");
+      }
+    }
+
+    async function applyLedCommand(event) {
+      event.preventDefault();
+      try {
+        const enabled = ledEnabled.value;
+        const response = await fetch(`/api/led/control?enabled=${encodeURIComponent(enabled)}`, {
+          cache: "no-store"
+        });
+        if (!response.ok) {
+          throw new Error(String(response.status));
+        }
+        const data = await response.json();
+        ledState.textContent = formatLedState(data.enabled);
+        setStatus(`LED: ${formatLedState(data.enabled)}`, "ok");
+      } catch (error) {
+        setStatus("LED: comando fallito", "error");
+      }
+    }
+
+    document.getElementById("led-form").addEventListener("submit", applyLedCommand);
+    loadLedStatus();
+    setInterval(loadLedStatus, 5000);
+  </script>
+</body>
+</html>

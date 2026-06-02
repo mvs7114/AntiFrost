@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AntiFrost Test API</title>
+  <link rel="stylesheet" href="/camera.css">
+</head>
+<body>
+  <main class="shell shell-narrow">
+    <header class="topbar">
+      <div>
+        <h1>Test API</h1>
+        <p>Area riservata a verifiche di programmazione.</p>
+      </div>
+      <nav>
+        <a href="/">Home</a>
+        <a href="/led">LED</a>
+      </nav>
+    </header>
+
+    <section class="card page-card">
+      <div class="warning">
+        Questa pagina non espone form di comando. Gli endpoint di test sono disponibili solo per verifiche tecniche da codice.
+      </div>
+      <div class="metric"><span>GPIO test status</span><strong>/api/test/status</strong></div>
+      <div class="metric"><span>GPIO test control</span><strong>/api/test/gpio/control</strong></div>
+    </section>
+  </main>
+</body>
+</html>
