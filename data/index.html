@@ -15,7 +15,9 @@
       </div>
       <nav>
         <a href="/camera">Camera</a>
+        <a href="/fan.html">Ventola</a>
         <a href="/led">LED</a>
+        <a href="/sensor">Sensore</a>
         <a href="/wifi.html">Stato Wi-Fi</a>
         <a href="/setup.html">Configura Wi-Fi</a>
         <button type="button" class="secondary" onclick="location.reload()">Aggiorna</button>
@@ -32,15 +34,17 @@
       </article>
 
       <article class="card">
-        <h2>Sensori</h2>
+        <h2>Sensore ambientale</h2>
         <div class="metric"><span>Temperatura</span><strong id="sensor-temp">n/d</strong></div>
         <div class="metric"><span>Umidita</span><strong id="sensor-humidity">n/d</strong></div>
+        <div class="actions"><a href="/sensor">Sensore</a></div>
       </article>
 
       <article class="card">
         <h2>Ventola</h2>
-        <div class="metric"><span>Stato</span><strong id="fan-state">n/d</strong></div>
-        <div class="metric"><span>Duty</span><strong id="fan-duty">n/d</strong></div>
+        <div class="metric"><span>Stato</span><strong id="fan-state">OFF</strong></div>
+        <div class="metric"><span>Velocita</span><strong id="fan-duty">0%</strong></div>
+        <div class="actions"><a href="/fan.html">Ventola</a></div>
       </article>
 
       <article class="card">
@@ -126,6 +130,23 @@
       }
     }
 
+    async function loadSensorStatus() {
+      try {
+        const response = await fetch("/api/sensor/status", { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("sensor " + response.status);
+        }
+        const data = await response.json();
+        document.getElementById("sensor-temp").textContent =
+          data.ok === true && data.temperature_c !== null ? `${Number(data.temperature_c).toFixed(1)} C` : "n/d";
+        document.getElementById("sensor-humidity").textContent =
+          data.ok === true && data.humidity_percent !== null ? `${Number(data.humidity_percent).toFixed(1)}%` : "n/d";
+      } catch (error) {
+        document.getElementById("sensor-temp").textContent = "n/d";
+        document.getElementById("sensor-humidity").textContent = "n/d";
+      }
+    }
+
     async function loadLedStatus() {
       try {
         const response = await fetch("/api/led/status", { cache: "no-store" });
@@ -141,13 +162,36 @@
       }
     }
 
+    async function loadFanStatus() {
+      try {
+        const response = await fetch("/api/fan/status", { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("fan " + response.status);
+        }
+        const data = await response.json();
+        const enabled = data.enabled;
+        const duty = data.duty_percent;
+        document.getElementById("fan-state").textContent =
+          enabled === true ? "ON" : enabled === false ? "OFF" : "n/d";
+        document.getElementById("fan-duty").textContent =
+          duty !== undefined ? `${duty}%` : "n/d";
+      } catch (error) {
+        document.getElementById("fan-state").textContent = "n/d";
+        document.getElementById("fan-duty").textContent = "n/d";
+      }
+    }
+
     loadSystemStatus();
     loadWifiStatus();
     loadCameraStatus();
+    loadSensorStatus();
     loadLedStatus();
+    loadFanStatus();
     setInterval(loadWifiStatus, 5000);
     setInterval(loadCameraStatus, 5000);
+    setInterval(loadSensorStatus, 300000);
     setInterval(loadLedStatus, 5000);
+    setInterval(loadFanStatus, 5000);
   </script>
 </body>
 </html>

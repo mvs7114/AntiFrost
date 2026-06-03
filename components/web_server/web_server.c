@@ -6,6 +6,7 @@
 
 #include "board_config.h"
 #include "camera_manager.h"
+#include "dht_sensor.h"
 #include "driver/gpio.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -13,6 +14,7 @@
 #include "esp_system.h"
 #include "esp_vfs_fat.h"
 #include "esp_wifi.h"
+#include "fan_control.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "led_control.h"
@@ -34,13 +36,14 @@ static const char *TAG = "web_server";
 #define WEB_SERVER_PASSWORD_BUFFER_SIZE 65
 #define WEB_SERVER_WIFI_APPLY_DELAY_MS 1500
 #define WEB_SERVER_RESTART_DELAY_MS 1500
-#define WEB_SERVER_MAX_URI_HANDLERS 20
+#define WEB_SERVER_MAX_URI_HANDLERS 24
 #define WEB_SERVER_CTRL_PORT 32768
 #define WEB_SERVER_STACK_SIZE 8192
 #define WEB_SERVER_MAX_OPEN_SOCKETS 7
 #define WEB_SERVER_RECV_WAIT_TIMEOUT_SEC 5
 #define WEB_SERVER_SEND_WAIT_TIMEOUT_SEC 5
 #define WEB_SERVER_SEND_BUDGET_MS (WEB_SERVER_SEND_WAIT_TIMEOUT_SEC * 1000)
+#define WEB_SERVER_SENSOR_CACHE_MS 300000
 
 #ifndef ANTIFROST_BUILD_VERSION
 #define ANTIFROST_BUILD_VERSION "dev"
@@ -54,6 +57,10 @@ typedef struct {
 static httpd_handle_t s_server;
 static wl_handle_t s_wl_handle = WL_INVALID_HANDLE;
 static bool s_fs_mounted;
+static bool s_sensor_cache_valid;
+static float s_sensor_temperature_c;
+static float s_sensor_humidity_percent;
+static int64_t s_sensor_last_read_ms;
 
 static const char *FALLBACK_INDEX_HTML =
     "<!doctype html><html lang=\"it\"><head><meta charset=\"utf-8\">"
@@ -271,6 +278,75 @@ static esp_err_t web_server_system_status_get_handler(httpd_req_t *req)
     return httpd_resp_send(req, response, len);
 }
 
+static esp_err_t web_server_sensor_status_get_handler(httpd_req_t *req)
+{
+    char refresh_text[WEB_SERVER_QUERY_VALUE_SIZE] = {0};
+    bool force_refresh = false;
+    esp_err_t query_err = web_server_query_value(req, "refresh", refresh_text, sizeof(refresh_text));
+    if (query_err == ESP_OK && refresh_text[0] != '\0') {
+        force_refresh = web_server_string_is_true(refresh_text);
+    }
+
+    int64_t now_ms = web_server_now_ms();
+    bool cache_expired = !s_sensor_cache_valid ||
+                         (now_ms - s_sensor_last_read_ms) >= WEB_SERVER_SENSOR_CACHE_MS;
+    esp_err_t read_err = ESP_OK;
+    bool refreshed = false;
+
+    if (force_refresh || cache_expired) {
+        float temperature_c = 0.0f;
+        float humidity_percent = 0.0f;
+        read_err = dht_read_data(&temperature_c, &humidity_percent);
+        refreshed = true;
+        if (read_err == ESP_OK) {
+            s_sensor_temperature_c = temperature_c;
+            s_sensor_humidity_percent = humidity_percent;
+            s_sensor_last_read_ms = web_server_now_ms();
+            s_sensor_cache_valid = true;
+            now_ms = s_sensor_last_read_ms;
+        }
+    }
+
+    char response[192] = {0};
+    int len = 0;
+    if (s_sensor_cache_valid) {
+        int64_t age_ms = now_ms - s_sensor_last_read_ms;
+        if (age_ms < 0) {
+            age_ms = 0;
+        }
+
+        int temperature_tenths = (int)(s_sensor_temperature_c * 10.0f);
+        int humidity_tenths = (int)(s_sensor_humidity_percent * 10.0f);
+        len = snprintf(response,
+                       sizeof(response),
+                       "{\"ok\":true,\"temperature_c\":%d.%d,\"humidity_percent\":%d.%d,"
+                       "\"age_ms\":%lld,\"cached\":%s,\"refreshed\":%s}",
+                       temperature_tenths / 10,
+                       abs(temperature_tenths % 10),
+                       humidity_tenths / 10,
+                       abs(humidity_tenths % 10),
+                       (long long)age_ms,
+                       refreshed && read_err == ESP_OK ? "false" : "true",
+                       refreshed && read_err == ESP_OK ? "true" : "false");
+    } else {
+        len = snprintf(response,
+                       sizeof(response),
+                       "{\"ok\":false,\"error\":\"%s\",\"temperature_c\":null,"
+                       "\"humidity_percent\":null,\"age_ms\":null,\"cached\":false,"
+                       "\"refreshed\":%s}",
+                       esp_err_to_name(read_err),
+                       refreshed ? "true" : "false");
+    }
+
+    if (len <= 0 || (size_t)len >= sizeof(response)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Status sensore troppo lungo");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, response, len);
+}
+
 static esp_err_t web_server_camera_params_get_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "HTTP camera parameters");
@@ -433,13 +509,67 @@ static esp_err_t web_server_led_control_get_handler(httpd_req_t *req)
     return web_server_led_status_get_handler(req);
 }
 
-static esp_err_t web_server_test_status_get_handler(httpd_req_t *req)
+static esp_err_t web_server_fan_status_get_handler(httpd_req_t *req)
 {
-    char response[80] = {0};
+    bool enabled = fan_control_is_enabled();
+    uint8_t duty_percent = fan_control_get_duty_percent();
+    char response[64] = {0};
     int len = snprintf(response,
                        sizeof(response),
-                       "{\"gpio2\":%d}",
-                       gpio_get_level(BOARD_GPIO2_TEST_GPIO));
+                       "{\"enabled\":%s,\"duty_percent\":%u}",
+                       enabled ? "true" : "false",
+                       (unsigned int)duty_percent);
+    if (len <= 0 || (size_t)len >= sizeof(response)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Status ventola troppo lungo");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, response, len);
+}
+
+static esp_err_t web_server_fan_control_get_handler(httpd_req_t *req)
+{
+    char enabled_text[WEB_SERVER_QUERY_VALUE_SIZE] = {0};
+    char duty_text[WEB_SERVER_QUERY_VALUE_SIZE] = {0};
+
+    esp_err_t err = web_server_query_value(req, "enabled", enabled_text, sizeof(enabled_text));
+    if (err != ESP_OK || enabled_text[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Parametro ventola mancante");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = web_server_query_value(req, "duty", duty_text, sizeof(duty_text));
+    if (err != ESP_OK || duty_text[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Duty ventola mancante");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char *end = NULL;
+    long duty = strtol(duty_text, &end, 10);
+    if (end == duty_text || *end != '\0' || duty < 0 || duty > 100) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Duty ventola non valido");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = fan_control_set(web_server_string_is_true(enabled_text), (uint8_t)duty);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Comando ventola fallito");
+        return err;
+    }
+
+    return web_server_fan_status_get_handler(req);
+}
+
+static esp_err_t web_server_test_status_get_handler(httpd_req_t *req)
+{
+    char response[128] = {0};
+    int len = snprintf(response,
+                       sizeof(response),
+                       "{\"gpio2\":%d,\"gpio21\":{\"enabled\":%s,\"duty\":%u}}",
+                       gpio_get_level(BOARD_GPIO2_TEST_GPIO),
+                       fan_control_is_enabled() ? "true" : "false",
+                       (unsigned int)fan_control_get_duty_percent());
     if (len <= 0 || (size_t)len >= sizeof(response)) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Status test troppo lungo");
         return ESP_FAIL;
@@ -455,7 +585,7 @@ static esp_err_t web_server_test_gpio_control_get_handler(httpd_req_t *req)
     char level_text[WEB_SERVER_QUERY_VALUE_SIZE] = {0};
 
     esp_err_t err = web_server_query_value(req, "target", target, sizeof(target));
-    if (err != ESP_OK || strcmp(target, "gpio2") != 0) {
+    if (err != ESP_OK || target[0] == '\0') {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Target test non valido");
         return ESP_ERR_INVALID_ARG;
     }
@@ -467,7 +597,15 @@ static esp_err_t web_server_test_gpio_control_get_handler(httpd_req_t *req)
     }
 
     int level = web_server_string_is_true(level_text) ? 1 : 0;
-    err = gpio_set_level(BOARD_GPIO2_TEST_GPIO, level);
+    if (strcmp(target, "gpio2") == 0) {
+        err = gpio_set_level(BOARD_GPIO2_TEST_GPIO, level);
+    } else if (strcmp(target, "gpio21") == 0 || strcmp(target, "fan") == 0) {
+        err = fan_control_set(level != 0, level != 0 ? 100 : 0);
+    } else {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Target test non valido");
+        return ESP_ERR_INVALID_ARG;
+    }
+
     if (err != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Comando test GPIO fallito");
         return err;
@@ -803,6 +941,9 @@ static esp_err_t web_server_build_file_path(const httpd_req_t *req,
     } else if (uri_len == strlen("/led") && strncmp(uri, "/led", uri_len) == 0) {
         uri = "/led.html";
         uri_len = strlen(uri);
+    } else if (uri_len == strlen("/sensor") && strncmp(uri, "/sensor", uri_len) == 0) {
+        uri = "/sensor.html";
+        uri_len = strlen(uri);
     } else if (uri_len == strlen("/test") && strncmp(uri, "/test", uri_len) == 0) {
         uri = "/test.html";
         uri_len = strlen(uri);
@@ -1061,6 +1202,13 @@ esp_err_t web_server_start(void)
         .user_ctx = NULL,
     };
 
+    const httpd_uri_t sensor_status_get = {
+        .uri = "/api/sensor/status",
+        .method = HTTP_GET,
+        .handler = web_server_sensor_status_get_handler,
+        .user_ctx = NULL,
+    };
+
     const httpd_uri_t camera_params_get = {
         .uri = "/api/camera/parameters",
         .method = HTTP_GET,
@@ -1107,6 +1255,20 @@ esp_err_t web_server_start(void)
         .uri = "/api/led/control",
         .method = HTTP_GET,
         .handler = web_server_led_control_get_handler,
+        .user_ctx = NULL,
+    };
+
+    const httpd_uri_t fan_status_get = {
+        .uri = "/api/fan/status",
+        .method = HTTP_GET,
+        .handler = web_server_fan_status_get_handler,
+        .user_ctx = NULL,
+    };
+
+    const httpd_uri_t fan_control_get = {
+        .uri = "/api/fan/control",
+        .method = HTTP_GET,
+        .handler = web_server_fan_control_get_handler,
         .user_ctx = NULL,
     };
 
@@ -1177,6 +1339,14 @@ esp_err_t web_server_start(void)
         return err;
     }
 
+    err = httpd_register_uri_handler(s_server, &sensor_status_get);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Registrazione handler stato sensore fallita: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
+
     err = httpd_register_uri_handler(s_server, &camera_params_get);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Registrazione handler parametri camera fallita: %s", esp_err_to_name(err));
@@ -1228,6 +1398,22 @@ esp_err_t web_server_start(void)
     err = httpd_register_uri_handler(s_server, &led_control_get);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Registrazione handler controllo LED fallita: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
+
+    err = httpd_register_uri_handler(s_server, &fan_status_get);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Registrazione handler stato ventola fallita: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
+
+    err = httpd_register_uri_handler(s_server, &fan_control_get);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Registrazione handler controllo ventola fallita: %s", esp_err_to_name(err));
         httpd_stop(s_server);
         s_server = NULL;
         return err;

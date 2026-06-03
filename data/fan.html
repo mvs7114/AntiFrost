@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AntiFrost Ventola</title>
+  <link rel="stylesheet" href="/camera.css">
+</head>
+<body>
+  <main class="shell shell-narrow">
+    <header class="topbar">
+      <div>
+        <h1>Ventola</h1>
+        <p>Test manuale PWM.</p>
+      </div>
+      <nav>
+        <a href="/">Home</a>
+        <a href="/camera">Camera</a>
+        <a href="/led">LED</a>
+        <button type="button" class="secondary" onclick="location.reload()">Aggiorna</button>
+      </nav>
+    </header>
+
+    <section class="card page-card">
+      <div class="fan-summary">
+        <div class="wifi-state">
+          Stato ventola: <strong id="fan-state">OFF</strong>
+        </div>
+        <div class="wifi-state">
+          Velocita impostata: <strong id="fan-speed-state">0%</strong>
+        </div>
+      </div>
+
+      <form id="fan-form">
+        <label>
+          Comando ventola
+          <select id="fan-command" name="enabled">
+            <option value="1">ON</option>
+            <option value="0" selected>OFF</option>
+          </select>
+        </label>
+
+        <label>
+          Velocita rpm
+          <select id="fan-speed" name="speed">
+            <option value="0">0%</option>
+            <option value="20">20%</option>
+            <option value="40">40%</option>
+            <option value="60">60%</option>
+            <option value="80">80%</option>
+            <option value="100">100%</option>
+          </select>
+        </label>
+
+        <button type="submit" class="full">Applica</button>
+      </form>
+
+      <div class="status-line idle" id="status-line">Ventola: sincronizzazione...</div>
+    </section>
+  </main>
+
+  <script>
+    const fanForm = document.getElementById("fan-form");
+    const fanCommand = document.getElementById("fan-command");
+    const fanState = document.getElementById("fan-state");
+    const fanSpeed = document.getElementById("fan-speed");
+    const fanSpeedState = document.getElementById("fan-speed-state");
+    const statusLine = document.getElementById("status-line");
+    let hasPendingChange = false;
+    let isApplying = false;
+
+    function selectedCommand() {
+      return fanCommand.value;
+    }
+
+    function normalizeFanSpeed(enabled) {
+      if (enabled && fanSpeed.value === "0") {
+        fanSpeed.value = "20";
+      }
+
+      if (!enabled) {
+        fanSpeed.value = "0";
+      }
+    }
+
+    function syncFanPreview() {
+      hasPendingChange = true;
+      const enabled = selectedCommand() === "1";
+      normalizeFanSpeed(enabled);
+      const speed = fanSpeed.value;
+      fanState.textContent = enabled ? "ON" : "OFF";
+      fanSpeedState.textContent = `${speed}%`;
+      statusLine.textContent = `Ventola: ${enabled ? "ON" : "OFF"} - ${speed}%`;
+      statusLine.className = `status-line ${enabled ? "ok" : "idle"}`;
+    }
+
+    function formatFanState(enabled) {
+      return enabled === true ? "ON" : enabled === false ? "OFF" : "n/d";
+    }
+
+    function applyFanStatus(data) {
+      const enabled = data.enabled === true;
+      const duty = Number.isFinite(Number(data.duty_percent)) ? Number(data.duty_percent) : 0;
+      fanCommand.value = enabled ? "1" : "0";
+      fanSpeed.value = String(duty);
+      fanState.textContent = formatFanState(data.enabled);
+      fanSpeedState.textContent = `${duty}%`;
+      statusLine.textContent = `Ventola: ${formatFanState(data.enabled)} - ${duty}%`;
+      statusLine.className = `status-line ${enabled ? "ok" : "idle"}`;
+    }
+
+    async function loadFanStatus() {
+      if (hasPendingChange || isApplying) {
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/fan/status", { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error(String(response.status));
+        }
+        const data = await response.json();
+        applyFanStatus(data);
+      } catch (error) {
+        fanState.textContent = "n/d";
+        fanSpeedState.textContent = "n/d";
+        statusLine.textContent = "Ventola: stato non disponibile";
+        statusLine.className = "status-line error";
+      }
+    }
+
+    async function applyFanCommand(event) {
+      event.preventDefault();
+      const enabled = selectedCommand() === "1";
+      normalizeFanSpeed(enabled);
+      isApplying = true;
+
+      try {
+        const response = await fetch(
+          `/api/fan/control?enabled=${encodeURIComponent(fanCommand.value)}&duty=${encodeURIComponent(fanSpeed.value)}`,
+          { cache: "no-store" }
+        );
+        if (!response.ok) {
+          throw new Error(String(response.status));
+        }
+        const data = await response.json();
+        hasPendingChange = false;
+        applyFanStatus(data);
+      } catch (error) {
+        statusLine.textContent = "Ventola: comando fallito";
+        statusLine.className = "status-line error";
+      } finally {
+        isApplying = false;
+      }
+    }
+
+    fanForm.addEventListener("change", syncFanPreview);
+    fanForm.addEventListener("submit", applyFanCommand);
+    loadFanStatus();
+    setInterval(loadFanStatus, 5000);
+  </script>
+</body>
+</html>

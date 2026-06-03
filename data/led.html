@@ -44,6 +44,8 @@
     const ledState = document.getElementById("led-state");
     const ledEnabled = document.getElementById("led-enabled");
     const statusLine = document.getElementById("status-line");
+    let hasPendingChange = false;
+    let isApplying = false;
 
     function setStatus(text, mode = "idle") {
       statusLine.textContent = text;
@@ -54,7 +56,18 @@
       return enabled === true ? "ON" : enabled === false ? "OFF" : "n/d";
     }
 
+    function syncLedPreview() {
+      hasPendingChange = true;
+      const enabled = ledEnabled.value === "1";
+      ledState.textContent = enabled ? "ON" : "OFF";
+      setStatus(`LED: ${enabled ? "ON" : "OFF"}`, enabled ? "ok" : "idle");
+    }
+
     async function loadLedStatus() {
+      if (hasPendingChange || isApplying) {
+        return;
+      }
+
       try {
         const response = await fetch("/api/led/status", { cache: "no-store" });
         if (!response.ok) {
@@ -74,6 +87,8 @@
 
     async function applyLedCommand(event) {
       event.preventDefault();
+      isApplying = true;
+
       try {
         const enabled = ledEnabled.value;
         const response = await fetch(`/api/led/control?enabled=${encodeURIComponent(enabled)}`, {
@@ -83,13 +98,17 @@
           throw new Error(String(response.status));
         }
         const data = await response.json();
+        hasPendingChange = false;
         ledState.textContent = formatLedState(data.enabled);
         setStatus(`LED: ${formatLedState(data.enabled)}`, "ok");
       } catch (error) {
         setStatus("LED: comando fallito", "error");
+      } finally {
+        isApplying = false;
       }
     }
 
+    document.getElementById("led-form").addEventListener("change", syncLedPreview);
     document.getElementById("led-form").addEventListener("submit", applyLedCommand);
     loadLedStatus();
     setInterval(loadLedStatus, 5000);

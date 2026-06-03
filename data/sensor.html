@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AntiFrost Sensore ambientale</title>
+  <link rel="stylesheet" href="/camera.css">
+</head>
+<body>
+  <main class="shell shell-narrow">
+    <header class="topbar">
+      <div>
+        <h1>Sensore ambientale</h1>
+        <p>Temperatura e umidita.</p>
+      </div>
+      <nav>
+        <a href="/">Home</a>
+        <a href="/fan.html">Ventola</a>
+        <a href="/led">LED</a>
+        <button type="button" class="secondary" onclick="location.reload()">Aggiorna</button>
+      </nav>
+    </header>
+
+    <section class="card page-card">
+      <div class="fan-summary">
+        <div class="wifi-state">
+          Temperatura: <strong id="sensor-temp">n/d</strong>
+        </div>
+        <div class="wifi-state">
+          Umidita: <strong id="sensor-humidity">n/d</strong>
+        </div>
+      </div>
+
+      <form id="sensor-form">
+        <button type="submit" class="full">Leggi sensore</button>
+      </form>
+
+      <div class="status-line idle" id="status-line">Sensore: sincronizzazione...</div>
+    </section>
+  </main>
+
+  <script>
+    const sensorTemp = document.getElementById("sensor-temp");
+    const sensorHumidity = document.getElementById("sensor-humidity");
+    const statusLine = document.getElementById("status-line");
+    let isReading = false;
+
+    function setStatus(text, mode = "idle") {
+      statusLine.textContent = text;
+      statusLine.className = `status-line ${mode}`;
+    }
+
+    function formatAge(ms) {
+      if (!Number.isFinite(Number(ms))) {
+        return "n/d";
+      }
+
+      const seconds = Math.round(Number(ms) / 1000);
+      if (seconds < 60) {
+        return `${seconds}s`;
+      }
+
+      return `${Math.round(seconds / 60)}min`;
+    }
+
+    function applySensorStatus(data) {
+      if (data.ok !== true) {
+        sensorTemp.textContent = "n/d";
+        sensorHumidity.textContent = "n/d";
+        setStatus("Sensore: lettura non disponibile", "error");
+        return;
+      }
+
+      sensorTemp.textContent = `${Number(data.temperature_c).toFixed(1)} C`;
+      sensorHumidity.textContent = `${Number(data.humidity_percent).toFixed(1)}%`;
+      setStatus(`Sensore: OK - aggiornato ${formatAge(data.age_ms)} fa`, "ok");
+    }
+
+    async function loadSensorStatus(forceRefresh = false) {
+      if (isReading) {
+        return;
+      }
+
+      isReading = true;
+      setStatus(forceRefresh ? "Sensore: lettura in corso..." : "Sensore: caricamento...", "warn");
+
+      try {
+        const url = forceRefresh ? "/api/sensor/status?refresh=1" : "/api/sensor/status";
+        const response = await fetch(url, { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error(String(response.status));
+        }
+        const data = await response.json();
+        applySensorStatus(data);
+      } catch (error) {
+        sensorTemp.textContent = "n/d";
+        sensorHumidity.textContent = "n/d";
+        setStatus("Sensore: stato non disponibile", "error");
+      } finally {
+        isReading = false;
+      }
+    }
+
+    document.getElementById("sensor-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      loadSensorStatus(true);
+    });
+
+    loadSensorStatus();
+    setInterval(() => loadSensorStatus(false), 300000);
+  </script>
+</body>
+</html>
