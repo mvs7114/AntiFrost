@@ -15,8 +15,6 @@
       </div>
       <nav>
         <a href="/">Home</a>
-        <a href="/camera">Camera</a>
-        <a href="/led">LED</a>
         <button type="button" class="secondary" onclick="location.reload()">Aggiorna</button>
       </nav>
     </header>
@@ -43,7 +41,6 @@
         <label>
           Velocita rpm
           <select id="fan-speed" name="speed">
-            <option value="0">0%</option>
             <option value="20">20%</option>
             <option value="40">40%</option>
             <option value="60">60%</option>
@@ -73,13 +70,23 @@
       return fanCommand.value;
     }
 
+    function isSupportedFanSpeed(value) {
+      return ["20", "40", "60", "80", "100"].includes(String(value));
+    }
+
+    function updateFanSpeedAvailability(enabled) {
+      fanSpeed.disabled = !enabled;
+    }
+
     function normalizeFanSpeed(enabled) {
-      if (enabled && fanSpeed.value === "0") {
+      updateFanSpeedAvailability(enabled);
+
+      if (enabled && !isSupportedFanSpeed(fanSpeed.value)) {
         fanSpeed.value = "20";
       }
 
       if (!enabled) {
-        fanSpeed.value = "0";
+        fanSpeed.value = "20";
       }
     }
 
@@ -87,7 +94,7 @@
       hasPendingChange = true;
       const enabled = selectedCommand() === "1";
       normalizeFanSpeed(enabled);
-      const speed = fanSpeed.value;
+      const speed = enabled ? fanSpeed.value : "0";
       fanState.textContent = enabled ? "ON" : "OFF";
       fanSpeedState.textContent = `${speed}%`;
       statusLine.textContent = `Ventola: ${enabled ? "ON" : "OFF"} - ${speed}%`;
@@ -102,7 +109,8 @@
       const enabled = data.enabled === true;
       const duty = Number.isFinite(Number(data.duty_percent)) ? Number(data.duty_percent) : 0;
       fanCommand.value = enabled ? "1" : "0";
-      fanSpeed.value = String(duty);
+      fanSpeed.value = enabled && isSupportedFanSpeed(duty) ? String(duty) : "20";
+      updateFanSpeedAvailability(enabled);
       fanState.textContent = formatFanState(data.enabled);
       fanSpeedState.textContent = `${duty}%`;
       statusLine.textContent = `Ventola: ${formatFanState(data.enabled)} - ${duty}%`;
@@ -133,11 +141,12 @@
       event.preventDefault();
       const enabled = selectedCommand() === "1";
       normalizeFanSpeed(enabled);
+      const duty = enabled ? fanSpeed.value : "0";
       isApplying = true;
 
       try {
         const response = await fetch(
-          `/api/fan/control?enabled=${encodeURIComponent(fanCommand.value)}&duty=${encodeURIComponent(fanSpeed.value)}`,
+          `/api/fan/control?enabled=${encodeURIComponent(fanCommand.value)}&duty=${encodeURIComponent(duty)}`,
           { cache: "no-store" }
         );
         if (!response.ok) {
@@ -156,6 +165,7 @@
 
     fanForm.addEventListener("change", syncFanPreview);
     fanForm.addEventListener("submit", applyFanCommand);
+    normalizeFanSpeed(false);
     loadFanStatus();
     setInterval(loadFanStatus, 5000);
   </script>

@@ -19,8 +19,8 @@ La mappatura e' stata aggiornata sul pinout Freenove ESP32-S3 WROOM allegato al 
 
 | Funzione | GPIO | Direzione | Stato boot | Note |
 | --- | --- | --- | --- | --- |
-| DHT11 data | GPIO14 | input/output open-drain | pull-up | T14, ADC2_CH3; libero rispetto a camera, USB, SD e PSRAM |
-| Fan PWM | GPIO21 | output PWM | off | LEDC previsto nel modulo `fan_control`; pin esposto e PWM capable |
+| DHT11 data | GPIO21 | input/output open-drain | pull-up esterna 4.7 kOhm | GPIO generico; linea dedicata senza carichi collegati |
+| Fan PWM | GPIO14 | output PWM | off | T14, ADC2_CH3; LEDC previsto nel modulo `fan_control`; pin esposto e PWM capable |
 | LED enable | GPIO47 | output | off | verificare driver, corrente e dissipazione |
 | GPIO2 test | GPIO2 | output | low | Linea di test manuale per verifiche hardware temporanee |
 | Status LED WS2812 | GPIO48 | output RMT | off | LED RGB onboard WS2812 |
@@ -35,8 +35,8 @@ Questi pin risultano esposti e non occupati da camera, USB, SD, PSRAM o seriale 
 
 | GPIO | Funzioni secondarie da pinout | Uso consigliato |
 | --- | --- | --- |
-| GPIO14 | T14, ADC2_CH3 | DHT11 data |
-| GPIO21 | GPIO generico | Fan PWM |
+| GPIO14 | T14, ADC2_CH3 | Fan PWM |
+| GPIO21 | GPIO generico | DHT11 data |
 | GPIO47 | GPIO generico | LED enable |
 | GPIO2 | ADC1, touch, LED_ON | GPIO2 test |
 | GPIO48 | WS2812 | Status LED onboard |
@@ -100,7 +100,7 @@ La camera usa la mappatura indicata dal pinout Freenove:
 
 ## Decisioni Aperte
 
-- Tipo esatto di sensore DHT: prima assegnazione su DHT11.
+- Tipo esatto di sensore DHT: DHT11 su GPIO21 con pull-up esterna 4.7 kOhm.
 - Driver ventola: MOSFET, transistor, driver dedicato o ventola PWM 4 fili.
 - LED: assorbimento, driver, alimentazione e dissipazione.
 - Storage: SD onboard su GPIO38-GPIO40 oppure FAT su flash.

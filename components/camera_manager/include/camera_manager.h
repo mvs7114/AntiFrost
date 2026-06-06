@@ -34,6 +34,7 @@ const camera_manager_param_info_t *camera_manager_find_param(const char *name);
 esp_err_t camera_manager_get_value(const char *name, int *value);
 esp_err_t camera_manager_set_value(const char *name, int value, bool dangerous_confirmed);
 esp_err_t camera_manager_restore_defaults(void);
+bool camera_manager_is_stream_active(void);
 esp_err_t camera_manager_send_status(httpd_req_t *req);
 esp_err_t camera_manager_send_capture(httpd_req_t *req);
 const char *camera_manager_risk_to_string(camera_manager_param_risk_t risk);

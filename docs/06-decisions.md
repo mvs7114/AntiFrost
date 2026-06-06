@@ -130,3 +130,42 @@ Conseguenze:
 - il profilo operativo usa frame buffer in PSRAM senza DMA PSRAM camera;
 - capture e stream restano protetti da mutex e validazione JPEG;
 - eventuali test futuri su DMA PSRAM vanno trattati come diagnostica separata, non come default.
+
+## ADR-008 - Inversione pin DHT11 e ventola PWM
+
+Decisione:
+
+Assegnare il DHT11 data a GPIO21 e la ventola PWM a GPIO14.
+
+Motivazione:
+
+- il circuito DHT11 ha una resistenza di pull-up esterna da 4.7 kOhm;
+- la linea dati DHT11 e' dedicata, senza carichi o altri collegamenti sul segnale;
+- GPIO21 e' un GPIO generico libero rispetto a camera, USB, SD, PSRAM e seriale;
+- GPIO14 resta adatto all'uscita PWM tramite LEDC per il controllo ventola.
+
+Conseguenze:
+
+- `BOARD_DHT11_GPIO` vale `GPIO_NUM_21`;
+- `BOARD_FAN_PWM_GPIO` vale `GPIO_NUM_14`;
+- il cablaggio hardware deve rispettare la nuova assegnazione prima dei test.
+
+## ADR-009 - Livello log seriale parametrizzato
+
+Decisione:
+
+Parametrizzare il livello dei log seriali ESP-IDF tramite `APP_SERIAL_LOG_LEVEL` in `main.c`.
+
+Motivazione:
+
+- il monitor seriale e' utile durante sviluppo e test hardware;
+- troppi log informativi possono rallentare il firmware e rendere il terminale rumoroso;
+- errori e warning devono poter restare visibili anche quando si silenziano gli `INFO`;
+- `DEBUG` deve essere disponibile solo quando richiesto esplicitamente.
+
+Conseguenze:
+
+- il livello runtime globale viene impostato con `esp_log_level_set("*", APP_SERIAL_LOG_LEVEL)`;
+- i livelli consigliati sono `ESP_LOG_ERROR`, `ESP_LOG_WARN`, `ESP_LOG_INFO` e `ESP_LOG_DEBUG`;
+- `sdkconfig.defaults` abilita `CONFIG_LOG_DYNAMIC_LEVEL_CONTROL` e massimo compilato `DEBUG`;
+- i log di boot molto precoci possono comparire prima che `app_main` imposti il livello runtime.

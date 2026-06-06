@@ -20,7 +20,7 @@ Il firmware usa ESP-IDF tramite PlatformIO, senza dipendenze Arduino. Lo svilupp
 - Flash: 16 MB.
 - PSRAM: 8 MB Octal.
 - Upload: CH343 USB-UART.
-- Framework: ESP-IDF.
+- Framework: ESP-IDF..è
 - Build system: PlatformIO.
 
 ## Stato Iniziale

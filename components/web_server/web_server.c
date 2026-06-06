@@ -44,6 +44,7 @@ static const char *TAG = "web_server";
 #define WEB_SERVER_SEND_WAIT_TIMEOUT_SEC 5
 #define WEB_SERVER_SEND_BUDGET_MS (WEB_SERVER_SEND_WAIT_TIMEOUT_SEC * 1000)
 #define WEB_SERVER_SENSOR_CACHE_MS 300000
+#define WEB_SERVER_SENSOR_FIRST_READ_RETRY_DELAY_MS 2500
 
 #ifndef ANTIFROST_BUILD_VERSION
 #define ANTIFROST_BUILD_VERSION "dev"
@@ -297,6 +298,10 @@ static esp_err_t web_server_sensor_status_get_handler(httpd_req_t *req)
         float temperature_c = 0.0f;
         float humidity_percent = 0.0f;
         read_err = dht_read_data(&temperature_c, &humidity_percent);
+        if (read_err != ESP_OK && !s_sensor_cache_valid) {
+            vTaskDelay(pdMS_TO_TICKS(WEB_SERVER_SENSOR_FIRST_READ_RETRY_DELAY_MS));
+            read_err = dht_read_data(&temperature_c, &humidity_percent);
+        }
         refreshed = true;
         if (read_err == ESP_OK) {
             s_sensor_temperature_c = temperature_c;
@@ -466,6 +471,23 @@ static esp_err_t web_server_camera_status_get_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "HTTP camera status");
     return camera_manager_send_status(req);
+}
+
+static esp_err_t web_server_camera_stream_status_get_handler(httpd_req_t *req)
+{
+    char response[32] = {0};
+    bool active = camera_manager_is_stream_active();
+    int len = snprintf(response,
+                       sizeof(response),
+                       "{\"active\":%s}",
+                       active ? "true" : "false");
+    if (len <= 0 || (size_t)len >= sizeof(response)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Status stream troppo lungo");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, response, len);
 }
 
 static esp_err_t web_server_camera_capture_get_handler(httpd_req_t *req)
@@ -1230,6 +1252,13 @@ esp_err_t web_server_start(void)
         .user_ctx = NULL,
     };
 
+    const httpd_uri_t camera_stream_status_get = {
+        .uri = "/api/camera/stream/status",
+        .method = HTTP_GET,
+        .handler = web_server_camera_stream_status_get_handler,
+        .user_ctx = NULL,
+    };
+
     const httpd_uri_t camera_capture_get = {
         .uri = "/capture",
         .method = HTTP_GET,
@@ -1366,6 +1395,14 @@ esp_err_t web_server_start(void)
     err = httpd_register_uri_handler(s_server, &camera_status_get);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Registrazione handler status camera fallita: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
+
+    err = httpd_register_uri_handler(s_server, &camera_stream_status_get);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Registrazione handler stato stream camera fallita: %s", esp_err_to_name(err));
         httpd_stop(s_server);
         s_server = NULL;
         return err;

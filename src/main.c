@@ -21,12 +21,44 @@ static const char *TAG = "antifrost";
 #define WEB_SERVER_ENABLED 1
 #define HEARTBEAT_ENABLED 0
 #define HEARTBEAT_INTERVAL_MS 30000
+#ifndef APP_SERIAL_LOG_LEVEL
+#define APP_SERIAL_LOG_LEVEL ESP_LOG_INFO
+#endif
+
+static const char *app_log_level_to_string(esp_log_level_t level)
+{
+    switch (level) {
+    case ESP_LOG_NONE:
+        return "NONE";
+    case ESP_LOG_ERROR:
+        return "ERROR";
+    case ESP_LOG_WARN:
+        return "WARNING";
+    case ESP_LOG_INFO:
+        return "INFO";
+    case ESP_LOG_DEBUG:
+        return "DEBUG";
+    case ESP_LOG_VERBOSE:
+        return "VERBOSE";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+static void app_configure_serial_logging(void)
+{
+    esp_log_level_set("*", APP_SERIAL_LOG_LEVEL);
+    ESP_LOGI(TAG, "Log seriale impostato a livello %s",
+             app_log_level_to_string(APP_SERIAL_LOG_LEVEL));
+}
 
 void app_main(void)
 {
 #if HEARTBEAT_ENABLED
     bool app_logger_ready = false;
 #endif
+
+    app_configure_serial_logging();
 
     ESP_ERROR_CHECK(board_gpio_init());
     ESP_ERROR_CHECK(dht_init());

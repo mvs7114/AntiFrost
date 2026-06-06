@@ -15,48 +15,39 @@
       </div>
       <nav>
         <a href="/">Home</a>
-        <a href="/wifi.html">Wi-Fi</a>
+        <button type="button" class="secondary" onclick="location.reload()">Aggiorna</button>
       </nav>
     </header>
 
     <section class="workspace">
       <div class="preview">
         <div class="stream-frame">
-          <img id="stream" src="/capture" alt="Anteprima camera">
+          <div class="preview-empty" id="preview-empty">Preview non disponibile</div>
+          <img id="stream" alt="Anteprima camera">
         </div>
-        <div class="actions">
-          <button type="button" id="preview-capture">Aggiorna preview</button>
-          <button type="button" id="preview-live">Avvia live</button>
-          <button type="button" id="apply">Applica</button>
-          <button type="button" id="save-profile">Salva profilo</button>
-          <button type="button" id="restore-defaults">Ripristina default</button>
-          <button type="button" id="capture-reference">Capture riferimento</button>
-        </div>
-        <div class="status-line" id="status-line">Camera: sincronizzazione...</div>
-        <a id="capture-link" class="capture-link" hidden>Apri ultimo riferimento</a>
-      </div>
 
-      <aside class="profiles">
-        <h2>Modalita rapida</h2>
-        <div class="mode-switch" role="tablist" aria-label="Modalita camera">
-          <button type="button" class="mode-button active" data-mode="manual">Manuale</button>
-          <button type="button" class="mode-button" data-mode="preset">Preset</button>
-          <button type="button" class="mode-button" data-mode="calibration">Calibrazione AntiFrost</button>
-        </div>
-        <div class="mode-panel active" data-panel="manual">
-          <p>Regolazione diretta dei parametri camera.</p>
-        </div>
-        <div class="mode-panel" data-panel="preset">
-          <div class="preset-grid" id="preset-grid"></div>
-        </div>
-        <div class="mode-panel" data-panel="calibration">
-          <p>Profilo stabile per acquisire un riferimento e confrontare condensa o brina.</p>
-          <div class="preset-grid">
-            <button type="button" id="apply-calibration">Applica calibrazione</button>
-            <button type="button" id="capture-calibration">Capture riferimento</button>
+        <div class="action-panel">
+          <h2>Cattura immagine</h2>
+          <div class="actions">
+            <button type="button" id="preview-capture">Cattura immagine</button>
+            <button type="button" id="preview-live">Avvia streaming</button>
           </div>
         </div>
-      </aside>
+
+        <div class="action-panel">
+          <h2>Configurazione</h2>
+          <div class="actions">
+            <button type="button" id="apply">Applica</button>
+            <button type="button" id="save-profile">Salva</button>
+            <button type="button" id="restore-defaults">Ripristina default</button>
+          </div>
+        </div>
+
+        <div class="action-panel status-panel">
+          <h2>Stato</h2>
+          <div class="status-line idle" id="status-line">Camera: sincronizzazione...</div>
+        </div>
+      </div>
     </section>
 
     <section class="controls">

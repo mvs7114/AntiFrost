@@ -399,6 +399,12 @@ static esp_err_t camera_manager_stream_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Camera non inizializzata");
         return ESP_FAIL;
     }
+    if (s_stream_active) {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "Multi-stream non supportato");
+        return ESP_ERR_INVALID_STATE;
+    }
 
     esp_err_t err = httpd_resp_set_type(req, STREAM_CONTENT_TYPE);
     if (err != ESP_OK) {
@@ -654,6 +660,11 @@ esp_err_t camera_manager_restore_defaults(void)
     }
 
     return camera_manager_save_config();
+}
+
+bool camera_manager_is_stream_active(void)
+{
+    return s_stream_active;
 }
 
 esp_err_t camera_manager_send_status(httpd_req_t *req)

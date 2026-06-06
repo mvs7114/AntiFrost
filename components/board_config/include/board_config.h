@@ -37,8 +37,8 @@ extern "C" {
  * Application GPIOs reserved for the first hardware tests.
  * These pins are exposed on the board and do not overlap the camera pinout.
  */
-#define BOARD_DHT11_GPIO GPIO_NUM_14
-#define BOARD_FAN_PWM_GPIO GPIO_NUM_21
+#define BOARD_DHT11_GPIO GPIO_NUM_21
+#define BOARD_FAN_PWM_GPIO GPIO_NUM_14
 #define BOARD_LED_GPIO GPIO_NUM_47
 #define BOARD_GPIO2_TEST_GPIO GPIO_NUM_2
 #define BOARD_WS2812_GPIO GPIO_NUM_48

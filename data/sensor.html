@@ -15,8 +15,6 @@
       </div>
       <nav>
         <a href="/">Home</a>
-        <a href="/fan.html">Ventola</a>
-        <a href="/led">LED</a>
         <button type="button" class="secondary" onclick="location.reload()">Aggiorna</button>
       </nav>
     </header>
@@ -73,7 +71,7 @@
 
       sensorTemp.textContent = `${Number(data.temperature_c).toFixed(1)} C`;
       sensorHumidity.textContent = `${Number(data.humidity_percent).toFixed(1)}%`;
-      setStatus(`Sensore: OK - aggiornato ${formatAge(data.age_ms)} fa`, "ok");
+      setStatus(`Sensore: OK - ultima lettura ${formatAge(data.age_ms)} fa`, "ok");
     }
 
     async function loadSensorStatus(forceRefresh = false) {

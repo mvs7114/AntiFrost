@@ -103,8 +103,14 @@ static esp_err_t wifi_manager_start_softap(void)
         return err;
     }
 
+    err = esp_wifi_set_ps(WIFI_PS_NONE);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Disabilitazione power-save SoftAP fallita: %s", esp_err_to_name(err));
+    }
+
     wifi_manager_set_state(WIFI_MANAGER_STATE_SOFTAP_ACTIVE);
     ESP_LOGI(TAG, "SoftAP attivo: SSID=%s password=%s", ssid, WIFI_MANAGER_SOFTAP_PASSWORD);
+    ESP_LOGI(TAG, "Configura Wi-Fi da http://192.168.4.1/setup.html");
     return ESP_OK;
 }
 
@@ -124,6 +130,11 @@ static esp_err_t wifi_manager_start_sta(void)
         ESP_LOGE(TAG, "Avvio STA fallito: %s", esp_err_to_name(err));
         wifi_manager_set_state(WIFI_MANAGER_STATE_ERROR);
         return err;
+    }
+
+    err = esp_wifi_set_ps(WIFI_PS_NONE);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Disabilitazione power-save STA fallita: %s", esp_err_to_name(err));
     }
 
     wifi_manager_set_state(WIFI_MANAGER_STATE_STA_CONNECTING);
@@ -323,6 +334,11 @@ esp_err_t wifi_manager_init(void)
         ESP_LOGE(TAG, "Inizializzazione driver Wi-Fi fallita: %s", esp_err_to_name(err));
         wifi_manager_set_state(WIFI_MANAGER_STATE_ERROR);
         return err;
+    }
+
+    err = esp_wifi_set_ps(WIFI_PS_NONE);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Disabilitazione power-save Wi-Fi fallita: %s", esp_err_to_name(err));
     }
 
     err = esp_event_handler_instance_register(WIFI_EVENT,

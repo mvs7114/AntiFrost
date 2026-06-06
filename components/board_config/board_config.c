@@ -22,7 +22,7 @@ esp_err_t board_gpio_init(void)
     }
 
     gpio_config_t output_config = {
-        .pin_bit_mask = BIT64(BOARD_FAN_PWM_GPIO) | BIT64(BOARD_LED_GPIO) | BIT64(BOARD_GPIO2_TEST_GPIO),
+        .pin_bit_mask = BIT64(BOARD_LED_GPIO) | BIT64(BOARD_GPIO2_TEST_GPIO),
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -35,7 +35,6 @@ esp_err_t board_gpio_init(void)
         return err;
     }
 
-    ESP_ERROR_CHECK_WITHOUT_ABORT(gpio_set_level(BOARD_FAN_PWM_GPIO, 0));
     ESP_ERROR_CHECK_WITHOUT_ABORT(gpio_set_level(BOARD_LED_GPIO, 0));
     ESP_ERROR_CHECK_WITHOUT_ABORT(gpio_set_level(BOARD_GPIO2_TEST_GPIO, 0));
 

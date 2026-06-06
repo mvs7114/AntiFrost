@@ -3,9 +3,8 @@ const statusLine = document.getElementById("status-line");
 const safeControls = document.getElementById("safe-controls");
 const advancedControls = document.getElementById("advanced-controls");
 const dangerousControls = document.getElementById("dangerous-controls");
-const presetGrid = document.getElementById("preset-grid");
 const dangerTools = document.getElementById("danger-tools");
-const captureLink = document.getElementById("capture-link");
+const previewEmpty = document.getElementById("preview-empty");
 
 const STREAM_URL = `${location.protocol}//${location.hostname}:81/stream`;
 const RISK_TEXT = "Queste impostazioni possono bloccare la camera, produrre immagine nera o richiedere un riavvio.";
@@ -31,41 +30,23 @@ const optionSets = {
   ]
 };
 
-const presets = {
-  Dashboard: {
-    framesize: 6, quality: 16, brightness: 0, contrast: 0, saturation: 0,
-    awb: 1, agc: 1, aec: 1, hmirror: 0, vflip: 0
-  },
-  "Analisi condensa": {
-    framesize: 6, quality: 10, brightness: 0, contrast: 1, saturation: -1,
-    awb: 1, awb_gain: 1, agc: 1, aec: 1, dcw: 1, raw_gma: 1, lenc: 1
-  },
-  "Notte/IR": {
-    framesize: 8, quality: 12, brightness: 1, contrast: 1, saturation: -2,
-    awb: 0, agc: 1, aec: 1, ae_level: 1
-  },
-  Debug: {
-    framesize: 6, quality: 12, brightness: 0, contrast: 0, saturation: 0,
-    colorbar: 0, bpc: 1, wpc: 1, raw_gma: 1, lenc: 1
-  },
-  "Calibrazione AntiFrost": {
-    framesize: 6, quality: 10, brightness: 0, contrast: 1, saturation: -2,
-    awb: 0, awb_gain: 0, agc: 1, aec: 1, ae_level: 0, dcw: 1,
-    bpc: 1, wpc: 1, raw_gma: 1, lenc: 1, special_effect: 2
-  }
-};
-
 const controls = [];
 const values = new Map();
 const elements = new Map();
 let lastCameraStatus = null;
-let captureFallbackTimer = null;
 let livePreviewActive = false;
 let previewCaptureBusy = false;
 
 function setStatus(text, mode = "") {
   statusLine.textContent = text;
-  statusLine.className = `status-line ${mode}`.trim();
+  statusLine.className = `status-line ${mode || "idle"}`.trim();
+}
+
+function setPreviewAvailable(available) {
+  if (previewEmpty) {
+    previewEmpty.hidden = available;
+  }
+  streamEl.style.visibility = available ? "visible" : "hidden";
 }
 
 function normalizeRisk(risk) {
@@ -86,6 +67,24 @@ function readControlValue(control, input) {
   return control.type === "toggle" ? (input.checked ? 1 : 0) : Number(input.value);
 }
 
+function formatControlValue(control, value) {
+  const numericValue = Number(value);
+
+  if (control.type === "toggle") {
+    return numericValue === 1 ? "ON" : "OFF";
+  }
+
+  const options = optionSets[control.name];
+  if (options) {
+    const option = options.find(([optionValue]) => Number(optionValue) === numericValue);
+    if (option) {
+      return option[1];
+    }
+  }
+
+  return String(numericValue);
+}
+
 function writeControlValue(name, value) {
   const input = elements.get(name);
   const control = controls.find((item) => item.name === name);
@@ -102,7 +101,7 @@ function writeControlValue(name, value) {
   values.set(name, Number(value));
   const output = document.querySelector(`[data-output="${name}"]`);
   if (output) {
-    output.textContent = control.type === "toggle" ? (Number(value) === 1 ? "ON" : "OFF") : String(Number(value));
+    output.textContent = formatControlValue(control, value);
   }
 }
 
@@ -187,7 +186,7 @@ function createControl(control) {
 
   input.addEventListener("input", () => {
     const value = readControlValue(control, input);
-    output.textContent = control.type === "toggle" ? (value === 1 ? "ON" : "OFF") : String(value);
+    output.textContent = formatControlValue(control, value);
   });
 
   if (control.risk === "dangerous") {
@@ -200,7 +199,7 @@ function createControl(control) {
       try {
         const applied = await controlRequest(control.name, value, control.risk);
         if (applied) {
-          await syncStatus(`${control.label}: ${value}`);
+          await syncStatus(`${control.label}: ${formatControlValue(control, value)}`);
         }
       } catch (error) {
         setStatus(`Errore applicando ${control.label}`, "error");
@@ -217,7 +216,7 @@ function createControl(control) {
       try {
         const applied = await controlRequest(control.name, value, control.risk);
         if (applied) {
-          await syncStatus(`${control.label}: ${value}`);
+          await syncStatus(`${control.label}: ${formatControlValue(control, value)}`);
         }
       } catch (error) {
         setStatus(`Errore applicando ${control.label}`, "error");
@@ -241,15 +240,18 @@ function createControl(control) {
   const initialValue = Number(control.value ?? control.default ?? 0);
   if (control.type === "toggle") {
     input.checked = initialValue === 1;
-    output.textContent = initialValue === 1 ? "ON" : "OFF";
+    output.textContent = formatControlValue(control, initialValue);
   } else {
     input.value = initialValue;
-    output.textContent = String(initialValue);
+    output.textContent = formatControlValue(control, initialValue);
   }
   return card;
 }
 
 function renderControls() {
+  safeControls.classList.remove("notice");
+  advancedControls.classList.remove("notice");
+  dangerousControls.classList.remove("notice");
   safeControls.textContent = "";
   advancedControls.textContent = "";
   dangerousControls.textContent = "";
@@ -266,18 +268,14 @@ function renderControls() {
   }
 }
 
-function renderPresets() {
-  presetGrid.textContent = "";
-  for (const name of Object.keys(presets)) {
-    if (name === "Calibrazione AntiFrost") {
-      continue;
-    }
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = name;
-    button.addEventListener("click", () => applyPreset(name));
-    presetGrid.appendChild(button);
-  }
+function renderControlsNotice(container, text, mode = "") {
+  container.classList.add("notice");
+  container.textContent = "";
+
+  const notice = document.createElement("article");
+  notice.className = `control notice ${mode}`.trim();
+  notice.textContent = text;
+  container.appendChild(notice);
 }
 
 function renderDangerTools() {
@@ -372,15 +370,6 @@ async function applyValues(nextValues) {
   return true;
 }
 
-async function applyPreset(name) {
-  try {
-    const applied = await applyValues(presets[name]);
-    setStatus(applied ? `Preset ${name} applicato` : "Applicazione annullata", applied ? "ok" : "");
-  } catch (error) {
-    setStatus(`Preset ${name} fallito`, "error");
-  }
-}
-
 async function applyAll() {
   const snapshot = {};
   for (const control of controls) {
@@ -440,59 +429,11 @@ async function restoreDefaults() {
   }
 }
 
-function setMode(mode) {
-  document.querySelectorAll(".mode-button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.mode === mode);
-  });
-  document.querySelectorAll(".mode-panel").forEach((panel) => {
-    panel.classList.toggle("active", panel.dataset.panel === mode);
-  });
-}
-
-async function captureReference() {
-  try {
-    const response = await fetch("/capture", { cache: "no-store" });
-    if (!response.ok) {
-      throw new Error(String(response.status));
-    }
-    const blob = await response.blob();
-    const saveResponse = await fetch("/api/camera/reference", {
-      method: "POST",
-      headers: { "Content-Type": "image/jpeg" },
-      body: blob
-    });
-    if (!saveResponse.ok) {
-      throw new Error(String(saveResponse.status));
-    }
-    const url = URL.createObjectURL(blob);
-    captureLink.href = url;
-    captureLink.download = `antifrost-reference-${Date.now()}.jpg`;
-    captureLink.hidden = false;
-    captureLink.textContent = "Apri ultimo riferimento";
-    setStatus("Capture riferimento salvata su FAT", "ok");
-  } catch (error) {
-    setStatus("Capture riferimento fallita", "error");
-  }
-}
-
 function startCaptureFallback() {
-  if (captureFallbackTimer !== null) {
-    return;
-  }
-
   livePreviewActive = false;
-  setStatus("Stream non disponibile, uso anteprima capture", "error");
-  captureFallbackTimer = setInterval(() => {
-    streamEl.src = `/capture?t=${Date.now()}`;
-  }, 2500);
-  streamEl.src = `/capture?t=${Date.now()}`;
-}
-
-function stopCaptureFallback() {
-  if (captureFallbackTimer !== null) {
-    clearInterval(captureFallbackTimer);
-    captureFallbackTimer = null;
-  }
+  streamEl.src = "";
+  setPreviewAvailable(false);
+  setStatus("Stream non disponibile. Verificare che non sia gia' aperto in un'altra pagina.", "error");
 }
 
 function refreshPreviewCapture() {
@@ -501,66 +442,93 @@ function refreshPreviewCapture() {
   }
 
   livePreviewActive = false;
-  stopCaptureFallback();
+  setPreviewAvailable(false);
   previewCaptureBusy = true;
   streamEl.src = `/capture?t=${Date.now()}`;
-  setStatus("Preview aggiornata", "ok");
+  setStatus("Camera: acquisizione immagine...", "warn");
 }
 
-function startLivePreview() {
+async function isRemoteStreamActive() {
+  const response = await fetch("/api/camera/stream/status", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(String(response.status));
+  }
+
+  const data = await response.json();
+  return data.active === true;
+}
+
+async function startLivePreview() {
+  setStatus("Camera: verifica disponibilita streaming...", "warn");
+
+  try {
+    if (await isRemoteStreamActive()) {
+      setPreviewAvailable(false);
+      setStatus("Streaming gia' attivo in un'altra pagina o client. Chiudere l'altro stream e riprovare.", "error");
+      return;
+    }
+  } catch (error) {
+    setPreviewAvailable(false);
+    setStatus("Stato streaming non disponibile", "error");
+    return;
+  }
+
   livePreviewActive = true;
-  stopCaptureFallback();
+  setPreviewAvailable(false);
   streamEl.src = `${STREAM_URL}?t=${Date.now()}`;
-  document.getElementById("preview-live").textContent = "Ferma live";
-  setStatus("Live preview avviata", "ok");
+  document.getElementById("preview-live").textContent = "Ferma streaming";
+  setStatus("Camera: streaming attivo", "ok");
 }
 
 function stopLivePreview() {
   livePreviewActive = false;
   streamEl.src = "";
-  document.getElementById("preview-live").textContent = "Avvia live";
-  setStatus("Live preview fermata", "ok");
-  setTimeout(refreshPreviewCapture, 250);
+  setPreviewAvailable(false);
+  document.getElementById("preview-live").textContent = "Avvia streaming";
+  setStatus("Camera: streaming fermo", "idle");
 }
 
-function toggleLivePreview() {
+async function toggleLivePreview() {
   if (livePreviewActive) {
     stopLivePreview();
   } else {
-    startLivePreview();
+    await startLivePreview();
   }
 }
 
 async function init() {
+  setPreviewAvailable(false);
+  renderControlsNotice(safeControls, "Caricamento parametri camera...");
+
   streamEl.addEventListener("load", () => {
     previewCaptureBusy = false;
+    setPreviewAvailable(true);
+    if (!livePreviewActive) {
+      setStatus("Camera: immagine acquisita", "ok");
+    }
   });
   streamEl.addEventListener("error", () => {
     previewCaptureBusy = false;
+    setPreviewAvailable(false);
     if (livePreviewActive) {
       startCaptureFallback();
+    } else {
+      setStatus("Camera: frame assente", "error");
     }
   });
-  renderPresets();
   renderDangerTools();
-  document.querySelectorAll(".mode-button").forEach((button) => {
-    button.addEventListener("click", () => setMode(button.dataset.mode));
-  });
   document.getElementById("apply").addEventListener("click", applyAll);
   document.getElementById("preview-capture").addEventListener("click", refreshPreviewCapture);
   document.getElementById("preview-live").addEventListener("click", toggleLivePreview);
   document.getElementById("save-profile").addEventListener("click", saveProfile);
   document.getElementById("restore-defaults").addEventListener("click", restoreDefaults);
-  document.getElementById("capture-reference").addEventListener("click", captureReference);
-  document.getElementById("apply-calibration").addEventListener("click", () => applyPreset("Calibrazione AntiFrost"));
-  document.getElementById("capture-calibration").addEventListener("click", captureReference);
-  refreshPreviewCapture();
 
   try {
     await loadParameterSchema();
     renderControls();
     await syncStatus();
   } catch (error) {
+    renderControlsNotice(safeControls, "Parametri principali non disponibili: verifica /api/camera/parameters.", "error");
     setStatus("Schema parametri camera non disponibile", "error");
   }
 }
