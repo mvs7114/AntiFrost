@@ -23,8 +23,7 @@ static uint32_t fan_control_percent_to_duty(uint8_t duty_percent)
         duty_percent = 100;
     }
 
-    uint32_t active_low_duty = ((uint32_t)duty_percent * FAN_CONTROL_LEDC_MAX_DUTY) / 100U;
-    return FAN_CONTROL_LEDC_MAX_DUTY - active_low_duty;
+    return ((uint32_t)duty_percent * FAN_CONTROL_LEDC_MAX_DUTY) / 100U;
 }
 
 esp_err_t fan_control_init(void)
@@ -53,7 +52,7 @@ esp_err_t fan_control_init(void)
         .channel = FAN_CONTROL_LEDC_CHANNEL,
         .intr_type = LEDC_INTR_DISABLE,
         .timer_sel = FAN_CONTROL_LEDC_TIMER,
-        .duty = FAN_CONTROL_LEDC_MAX_DUTY,
+        .duty = 0,
         .hpoint = 0,
     };
 
